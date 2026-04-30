@@ -1,0 +1,191 @@
+#pragma once
+#include <Windows.h>
+#include <TlHelp32.h>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <stdexcept>
+
+// Dolphin emulates the GameCube/Wii memory starting at a base address in its process.
+// We find Dolphin.exe, locate its emulated RAM base, then read/write at offsets.
+
+class DolphinMemory {
+public:
+    DolphinMemory() = default;
+    ~DolphinMemory() { disconnect(); }
+
+    // ── Connect ───────────────────────────────────────────
+    bool connect() {
+        disconnect();
+
+        dolphin_pid_ = find_process("Dolphin.exe");
+        if (!dolphin_pid_) { status_ = "Dolphin not found"; return false; }
+
+        handle_ = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION,
+                              FALSE, dolphin_pid_);
+        if (!handle_) {
+            status_ = "Failed to open Dolphin process (run as admin?)";
+            return false;
+        }
+
+        mem_base_ = find_emu_base();
+        if (!mem_base_) {
+            status_ = "Could not find emulated RAM base (game not running?)";
+            CloseHandle(handle_);
+            handle_ = nullptr;
+            return false;
+        }
+
+        status_ = "Connected";
+        return true;
+    }
+
+    void disconnect() {
+        if (handle_) { CloseHandle(handle_); handle_ = nullptr; }
+        dolphin_pid_ = 0;
+        mem_base_ = 0;
+        status_ = "Disconnected";
+    }
+
+    bool is_connected() const { return handle_ != nullptr && mem_base_ != 0; }
+    uint64_t get_mem_base() const { return mem_base_; }
+    const std::string& status() const { return status_; }
+
+    // ── Read/Write ────────────────────────────────────────
+    // addr = GameCube effective address (e.g. 0x8045A1A8)
+    float read_float(uint32_t addr) const {
+        uint32_t raw = read_u32(addr);
+        // GameCube is big-endian, PC is little-endian — swap bytes
+        float val;
+        memcpy(&val, &raw, 4);
+        return val;
+    }
+
+    uint32_t read_u32(uint32_t addr) const {
+        uint32_t val = 0;
+        read_bytes(addr, &val, 4);
+        return _byteswap_ulong(val);
+    }
+
+    uint16_t read_u16(uint32_t addr) const {
+        uint16_t val = 0;
+        read_bytes(addr, &val, 2);
+        return _byteswap_ushort(val);
+    }
+
+    bool read_block(uint32_t addr, void* buf, size_t size) const {
+        if (!handle_ || !mem_base_ || !is_mem1_range(addr, size)) return false;
+        SIZE_T bytes_read = 0;
+        return ReadProcessMemory(handle_, (LPCVOID)gc_to_host(addr), buf, size, &bytes_read) &&
+               bytes_read == size;
+    }
+
+    uint8_t read_u8(uint32_t addr) const {
+        uint8_t val = 0;
+        read_bytes(addr, &val, 1);
+        return val;
+    }
+
+    void write_float(uint32_t addr, float val) const {
+        uint32_t raw;
+        memcpy(&raw, &val, 4);
+        raw = _byteswap_ulong(raw);
+        write_bytes(addr, &raw, 4);
+    }
+
+    void write_u32(uint32_t addr, uint32_t val) const {
+        val = _byteswap_ulong(val);
+        write_bytes(addr, &val, 4);
+    }
+
+    void write_u16(uint32_t addr, uint16_t val) const {
+        val = _byteswap_ushort(val);
+        write_bytes(addr, &val, 2);
+    }
+
+    void write_u8(uint32_t addr, uint8_t val) const {
+        write_bytes(addr, &val, 1);
+    }
+
+    // Dereference a pointer in game memory
+    uint32_t deref(uint32_t ptr_addr) const {
+        return read_u32(ptr_addr);
+    }
+
+private:
+    HANDLE   handle_     = nullptr;
+    DWORD    dolphin_pid_ = 0;
+    uintptr_t mem_base_  = 0;
+    std::string status_  = "Disconnected";
+
+    static constexpr uint32_t kMem1Start = 0x80000000u;
+    static constexpr uint32_t kMem1Size = 0x01800000u;
+    static constexpr uint32_t kMem1End = kMem1Start + kMem1Size;
+
+    static bool is_mem1_range(uint32_t gc_addr, size_t size) {
+        if (gc_addr < kMem1Start || gc_addr >= kMem1End)
+            return false;
+        const uint64_t end = static_cast<uint64_t>(gc_addr) + static_cast<uint64_t>(size);
+        return end <= kMem1End;
+    }
+
+    // Convert GC address to host address
+    uintptr_t gc_to_host(uint32_t gc_addr) const {
+        // GC RAM starts at 0x80000000
+        uint32_t offset = gc_addr - kMem1Start;
+        return mem_base_ + offset;
+    }
+
+    void read_bytes(uint32_t gc_addr, void* buf, size_t size) const {
+        if (!handle_ || !mem_base_ || !is_mem1_range(gc_addr, size)) return;
+        SIZE_T bytes_read;
+        ReadProcessMemory(handle_, (LPCVOID)gc_to_host(gc_addr), buf, size, &bytes_read);
+    }
+
+    void write_bytes(uint32_t gc_addr, const void* buf, size_t size) const {
+        if (!handle_ || !mem_base_ || !is_mem1_range(gc_addr, size)) return;
+        SIZE_T bytes_written;
+        WriteProcessMemory(handle_, (LPVOID)gc_to_host(gc_addr), buf, size, &bytes_written);
+    }
+
+    // Find process by name, return PID
+    static DWORD find_process(const char* name) {
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap == INVALID_HANDLE_VALUE) return 0;
+        PROCESSENTRY32 pe = { sizeof(pe) };
+        DWORD pid = 0;
+        if (Process32First(snap, &pe)) {
+            do {
+                if (_stricmp(pe.szExeFile, name) == 0) {
+                    pid = pe.th32ProcessID;
+                    break;
+                }
+            } while (Process32Next(snap, &pe));
+        }
+        CloseHandle(snap);
+        return pid;
+    }
+
+    // Find Dolphin's emulated RAM base
+    // GC RAM = 32MB (0x2000000), Wii RAM = 64MB (0x4000000)
+    // Verify by checking if Trilogy state_manager at offset 0x00557678
+    // contains a valid 0x80xxxxxx pointer
+    uintptr_t find_emu_base() const {
+        MEMORY_BASIC_INFORMATION mbi;
+        uintptr_t addr = 0;
+        uintptr_t fallback = 0;
+
+        while (VirtualQueryEx(handle_, (LPCVOID)addr, &mbi, sizeof(mbi))) {
+            if (mbi.State == MEM_COMMIT && mbi.Type == MEM_MAPPED &&
+                (mbi.RegionSize == 0x4000000 || mbi.RegionSize == 0x2000000)) {
+
+                uintptr_t base = (uintptr_t)mbi.BaseAddress;
+                if (!fallback) fallback = base;
+            }
+            if (addr + mbi.RegionSize <= addr) break;
+            addr += mbi.RegionSize;
+        }
+        return fallback;
+    }
+};
