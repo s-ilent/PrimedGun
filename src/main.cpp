@@ -591,10 +591,15 @@ static void apply_dolphin_vr_units_per_meter() {
     if (path.empty())
         return;
 
-    const std::vector<std::pair<std::string, std::string>> values = {
+    const std::vector<std::pair<std::string, std::string>> graphics_values = {
         {"UnitsPerMeter", "1.50"},
     };
-    apply_ini_section_values(path, "Graphics.VR", values, {});
+    apply_ini_section_values(path, "Graphics.VR", graphics_values, {});
+
+    const std::vector<std::pair<std::string, std::string>> legacy_values = {
+        {"UnitsPerMetre", "1.50"},
+    };
+    apply_ini_section_values(path, "VR", legacy_values, {});
 }
 
 static std::vector<LoadedPatch> load_app_patch_files() {

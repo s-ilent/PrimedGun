@@ -48,6 +48,7 @@ std::unordered_map<XrAction, std::string> g_actions;
 std::unordered_map<XrSpace, std::string> g_spaces;
 uint64_t g_generation = 0;
 uint64_t g_lastLogMs = 0;
+uint64_t g_lastInstallCheckMs = 0;
 
 std::wstring Widen(std::string_view value) {
     return std::wstring(value.begin(), value.end());
@@ -141,6 +142,8 @@ std::string ActionName(XrAction action) {
 }
 
 PFN_xrVoidFunction WrapProc(const char* name, PFN_xrVoidFunction proc);
+bool InstallInlineDetour(HMODULE openxr);
+bool InstallRuntimeNegotiationDetour(HMODULE runtime);
 
 XrResult XRAPI_PTR Hook_xrGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function) {
     if (!g_realGetInstanceProcAddr)
@@ -206,11 +209,9 @@ XrResult XRAPI_PTR Hook_xrCreateActionSpace(XrSession session, const XrActionSpa
         std::lock_guard<std::mutex> guard(g_mutex);
         const auto actionIt = g_actions.find(createInfo->action);
         const auto pathIt = g_paths.find(createInfo->subactionPath);
-        const std::string actionName = actionIt != g_actions.end() ? actionIt->second : "unknown_action";
-        const std::string pathName = pathIt != g_paths.end() ? pathIt->second : "unknown_path";
-        g_spaces[*space] = actionName + "|" + pathName;
-        Log(L"OpenXR action space: " + Widen(g_spaces[*space]) +
-            L" sourceOffset " + FormatPose(createInfo->poseInActionSpace));
+        if (actionIt != g_actions.end() && pathIt != g_paths.end() && actionIt->second == "aim_pose") {
+            g_spaces[*space] = actionIt->second + "|" + pathIt->second;
+        }
     }
     return result;
 }
@@ -539,6 +540,10 @@ bool InstallIfAvailable(SharedState* state) {
     if (!openxr)
         openxr = GetModuleHandleW(L"OpenXR_loader.dll");
     HMODULE runtime = GetModuleHandleW(L"vrclient_x64.dll");
+    if (!runtime)
+        runtime = GetModuleHandleW(L"LibOVRRT64_1.dll");
+    if (!runtime)
+        runtime = GetModuleHandleW(L"MixedRealityRuntime.dll");
     const bool getProcDetour = InstallGetProcAddressDetour();
     const bool inlineDetour = openxr ? InstallInlineDetour(openxr) : false;
     const bool runtimeDetour = runtime ? InstallRuntimeNegotiationDetour(runtime) : false;
@@ -555,10 +560,15 @@ bool InstallIfAvailable(SharedState* state) {
 
 void Poll(SharedState* state) {
     g_sharedState = state;
-    if (!g_installed.load())
-        InstallIfAvailable(state);
 
     const uint64_t now = GetTickCount64();
+    if (!g_installed.load() || !g_runtimeInstalled.load() || !g_realGetInstanceProcAddr) {
+        if (now - g_lastInstallCheckMs >= 1000) {
+            g_lastInstallCheckMs = now;
+            InstallIfAvailable(state);
+        }
+    }
+
     if (g_installed.load() && now - g_lastLogMs > 5000) {
         g_lastLogMs = now;
         std::lock_guard<std::mutex> guard(g_mutex);
