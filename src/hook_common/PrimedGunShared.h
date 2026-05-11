@@ -7,7 +7,7 @@ namespace PrimedGun {
 inline constexpr wchar_t SharedMemoryName[] = L"Local\\PrimedGunSharedState";
 inline constexpr wchar_t SharedMutexName[] = L"Local\\PrimedGunSharedStateMutex";
 inline constexpr uint32_t SharedStateMagic = 0x50475652; // PGVR
-inline constexpr uint32_t SharedStateVersion = 4;
+inline constexpr uint32_t SharedStateVersion = 8;
 inline constexpr uint32_t MaxGamePatches = 128;
 inline constexpr uint32_t HookStatusDllAlive = 1u << 0;
 inline constexpr uint32_t HookStatusOpenXrInstalled = 1u << 1;
@@ -32,6 +32,7 @@ struct PoseState {
     Quat orientation{};
     Vec3 linearVelocityMetersPerSecond{};
     Vec3 angularVelocityRadiansPerSecond{};
+    uint32_t buttons = 0;
 };
 
 struct CenterEyeViewport {
@@ -46,7 +47,39 @@ struct SettingsState {
     uint32_t enableCenterEyeViewport = 1;
     uint32_t enableGraphicsHooks = 1;
     uint32_t enableVrApiHooks = 1;
+    uint32_t showAlignmentPrompt = 0;
+    uint32_t vrMenuVisible = 0;
+    uint32_t vrMenuGeneration = 0;
+    uint32_t vrMenuSelectedIndex = 0;
+    uint32_t vrMenuItemCount = 0;
+    uint32_t vrMenuPointerActive = 0;
+    uint32_t vrMenuSavedNotice = 0;
+    float vrMenuPointerX = 0.5f;
+    float vrMenuPointerY = 0.5f;
     float worldScale = 1.0f;
+    uint32_t useRightHand = 1;
+    uint32_t requireTrigger = 0;
+    float triggerThreshold = 0.5f;
+    float offsetX = 0.0f;
+    float offsetY = 0.0f;
+    float offsetZ = 0.0f;
+    float rotOffsetX = 0.0f;
+    float rotOffsetY = 0.0f;
+    float rotOffsetZ = 0.0f;
+    uint32_t gunTargetingEnabled = 1;
+    float gunTargetingDistance = 60.0f;
+    float gunTargetingRadius = 2.5f;
+    uint32_t autoDolphinXrControls = 1;
+    uint32_t xrDpadEnabled = 1;
+    float xrDpadHeadRadius = 0.18f;
+    float xrDpadHeadYBelow = 0.14f;
+    float xrDpadDeadzone = 0.45f;
+    uint32_t directionalMovementEnabled = 1;
+    uint32_t directionalMovementUseRightStick = 0;
+    float directionalMovementDeadzone = 0.25f;
+    float directionalMovementSpeed = 14.0f;
+    float directionalMovementAccel = 45.0f;
+    float directionalMovementAirAccel = 8.0f;
     CenterEyeViewport centerEyeViewport{};
 };
 

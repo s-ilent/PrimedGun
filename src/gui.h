@@ -348,6 +348,10 @@ inline void draw_gui(Settings& s, AppState& app,
 
     ImGui::Separator();
 
+    if (ImGui::Button("Reset All Settings", {full_width, 30})) {
+        s.reset_all();
+    }
+
     if (ImGui::Button("Save Settings", {full_width, 30})) {
         s.save();
         ImGui::OpenPopup("Saved!");
@@ -359,7 +363,7 @@ inline void draw_gui(Settings& s, AppState& app,
     }
 
     ImGui::Spacing();
-    const char* credit = "By Nobbie  v0.9.2";
+    const char* credit = "By Nobbie  v0.9.3";
     const float credit_width = ImGui::CalcTextSize(credit).x;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + full_width - credit_width);
     ImGui::TextDisabled("%s", credit);

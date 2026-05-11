@@ -36,7 +36,7 @@ bool Install() {
     return true;
 }
 
-void PollBackendModules() {
+void PollBackendModules(const SharedState* shared) {
     for (BackendModule& backend : g_backends) {
         if (!backend.seen && GetModuleHandleW(backend.moduleName)) {
             backend.seen = true;
@@ -45,7 +45,7 @@ void PollBackendModules() {
     }
 
     VulkanHooks::InstallIfAvailable();
-    VulkanHooks::PollRuntimeControls();
+    VulkanHooks::PollRuntimeControls(shared);
 }
 
 void Shutdown() {

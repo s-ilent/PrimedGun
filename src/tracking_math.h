@@ -18,6 +18,10 @@ struct Pose {
     float qz = 0.0f;
     float qw = 1.0f;
     float trigger = 0.0f;
+    bool trigger_click = false;
+    bool thumbstick_click = false;
+    bool button_a = false;
+    bool button_b = false;
     float stick_x = 0.0f;
     float stick_y = 0.0f;
     int stick_axis = 0;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PrimedGun VERSION 0.9.2)
+project(PrimedGun VERSION 0.9.3)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,6 +17,17 @@ if(NOT OPENXR_INCLUDE_DIR)
     message(FATAL_ERROR "OpenXR SDK headers not found. Expected C:/OpenXR-SDK")
 endif()
 message(STATUS "OpenXR include: ${OPENXR_INCLUDE_DIR}")
+
+find_path(VULKAN_INCLUDE_DIR vulkan/vulkan.h
+    HINTS
+        C:/prime-xr/Externals/Vulkan-Headers/include
+        C:/Users/Roman/dolphin-vr-no-ovr-VR-Hydra/Externals/Vulkan/Include
+        C:/msys64/mingw64/include
+)
+if(NOT VULKAN_INCLUDE_DIR)
+    message(FATAL_ERROR "Vulkan headers not found")
+endif()
+message(STATUS "Vulkan include: ${VULKAN_INCLUDE_DIR}")
 
 # ── ImGui ─────────────────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
@@ -60,6 +71,7 @@ add_library(PrimedGunHookCommon INTERFACE)
 target_include_directories(PrimedGunHookCommon INTERFACE
     src/hook_common
     ${OPENXR_INCLUDE_DIR}
+    ${VULKAN_INCLUDE_DIR}
 )
 
 add_library(PrimedGun_DolphinHook SHARED
@@ -76,7 +88,7 @@ add_library(PrimedGun_DolphinHook SHARED
 target_link_libraries(PrimedGun_DolphinHook PRIVATE PrimedGunHookCommon)
 target_compile_features(PrimedGun_DolphinHook PRIVATE cxx_std_20)
 target_compile_definitions(PrimedGun_DolphinHook PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN PRIMEDGUN_DOLPHINHOOK_EXPORTS)
-target_link_libraries(PrimedGun_DolphinHook PRIVATE psapi)
+target_link_libraries(PrimedGun_DolphinHook PRIVATE psapi d3d11)
 set_target_properties(PrimedGun_DolphinHook PROPERTIES PREFIX "")
 
 # Copy runtime DLLs next to the built binaries for direct build\bin launches.

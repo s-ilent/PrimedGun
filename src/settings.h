@@ -78,8 +78,8 @@ struct Settings {
     float world_scale = kDefaultWorldScale;
     bool require_trigger = false;
     float trigger_threshold = 0.5f;
-    bool show_matrix_debug = true;
-    bool show_controller_debug = true;
+    bool show_matrix_debug = false;
+    bool show_controller_debug = false;
     bool log_cannon_rotation_debug = false;
     bool gun_targeting_enabled = kDefaultGunTargetingEnabled;
     float gun_targeting_distance = kDefaultGunTargetingDistance;
@@ -98,6 +98,37 @@ struct Settings {
     float directional_movement_air_accel = kDefaultDirectionalMovementAirAccel;
 
     static const char* filename() { return "primedgun_settings.ini"; }
+
+    void reset_all() {
+        use_right_hand = kDefaultUseRightHand;
+        offset_x = kDefaultOffsetX;
+        offset_y = kDefaultOffsetY;
+        offset_z = kDefaultOffsetZ;
+        rot_offset_x = kDefaultRotOffsetX;
+        rot_offset_y = kDefaultRotOffsetY;
+        rot_offset_z = kDefaultRotOffsetZ;
+        world_scale = kDefaultWorldScale;
+        require_trigger = false;
+        trigger_threshold = 0.5f;
+        show_matrix_debug = false;
+        show_controller_debug = false;
+        log_cannon_rotation_debug = false;
+        gun_targeting_enabled = kDefaultGunTargetingEnabled;
+        gun_targeting_distance = kDefaultGunTargetingDistance;
+        gun_targeting_radius = kDefaultGunTargetingRadius;
+        auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
+        xr_dpad_enabled = kDefaultXrDpadEnabled;
+        xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
+        xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
+        xr_dpad_deadzone = kDefaultXrDpadDeadzone;
+        xr_dpad_stick_axis = kDefaultXrDpadStickAxis;
+        directional_movement_enabled = kDefaultDirectionalMovementEnabled;
+        directional_movement_use_right_stick = kDefaultDirectionalMovementUseRightStick;
+        directional_movement_deadzone = kDefaultDirectionalMovementDeadzone;
+        directional_movement_speed = kDefaultDirectionalMovementSpeed;
+        directional_movement_accel = kDefaultDirectionalMovementAccel;
+        directional_movement_air_accel = kDefaultDirectionalMovementAirAccel;
+    }
 
     void save() const {
         std::ofstream f(filename());

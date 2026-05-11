@@ -47,11 +47,20 @@ static HANDLE         g_shared_mapping = nullptr;
 static PrimedGun::SharedState* g_shared_state = nullptr;
 static bool g_last_auto_dolphin_xr_controls = false;
 
+static constexpr uint32_t kButtonTriggerClick = 1u << 0;
+static constexpr uint32_t kButtonThumbstickClick = 1u << 1;
+static constexpr uint32_t kButtonA = 1u << 2;
+static constexpr uint32_t kButtonB = 1u << 3;
+
 static float g_smooth_mat[12] = {1,0,0,0, 0,1,0,0, 0,0,1,0};
 static float g_smooth_pitch = 0.0f;
 static bool g_lock_pitch_have_unlocked = false;
 static float g_lock_pitch_unlocked = 0.0f;
 static std::atomic<bool> g_running = true;
+static std::atomic<uint64_t> g_last_cannon_transform_write_ms = 0;
+static std::atomic<uint32_t> g_last_cannon_transform_player = 0;
+static std::atomic<uint32_t> g_last_cannon_transform_gun = 0;
+static std::atomic<uint32_t> g_cannon_transform_ready_frames = 0;
 static std::mutex g_pose_mutex;
 
 struct LoadedPatch {
@@ -126,6 +135,12 @@ static void app_hook_log(std::wstring_view message) {
         g_hook_log << message << L"\n";
         g_hook_log.flush();
     }
+}
+
+static std::wstring hex32(uint32_t value) {
+    std::wstringstream ss;
+    ss << L"0x" << std::hex << std::uppercase << value;
+    return ss.str();
 }
 
 static bool app_logging_enabled() {
@@ -282,6 +297,14 @@ static fs::path dolphin_gm8e01_vr_settings_path() {
         return {};
     return profile / L"Documents" / L"Dolphin Emulator" /
         L"GameSettingsVR" / L"GM8E01.ini";
+}
+
+static fs::path dolphin_gm8e01_settings_path() {
+    const fs::path profile = user_profile_path();
+    if (profile.empty())
+        return {};
+    return profile / L"Documents" / L"Dolphin Emulator" /
+        L"GameSettings" / L"GM8E01.ini";
 }
 
 static std::vector<std::string> read_text_lines(const fs::path& path) {
@@ -506,6 +529,39 @@ static void apply_ini_section_values(const fs::path& path, const std::string& se
     write_text_lines_if_changed(path, output);
 }
 
+static void disable_ini_section_entries(const fs::path& path, const std::string& section) {
+    std::vector<std::string> lines = read_text_lines(path);
+
+    const std::string section_header = "[" + section + "]";
+    size_t section_begin = lines.size();
+    size_t section_end = lines.size();
+    find_ini_section(lines, section, section_begin, section_end);
+
+    if (section_begin == lines.size()) {
+        if (!lines.empty() && !lines.back().empty())
+            lines.push_back({});
+        lines.push_back(section_header);
+        write_text_lines_if_changed(path, lines);
+        return;
+    }
+
+    std::vector<std::string> output;
+    output.reserve(lines.size());
+    output.insert(output.end(), lines.begin(), lines.begin() + static_cast<std::ptrdiff_t>(section_begin + 1));
+
+    for (size_t i = section_begin + 1; i < section_end; ++i) {
+        const std::string trimmed = trim_ascii(lines[i]);
+        if (trimmed.empty() || trimmed[0] == '#' || trimmed[0] == ';') {
+            output.push_back(lines[i]);
+        } else {
+            output.push_back("# PrimedGun disabled: " + trimmed);
+        }
+    }
+
+    output.insert(output.end(), lines.begin() + static_cast<std::ptrdiff_t>(section_end), lines.end());
+    write_text_lines_if_changed(path, output);
+}
+
 static void apply_dolphin_xr_gamecube_controls() {
     restore_dolphin_gcpad1_controls();
     restore_file_backup(dolphin_ini_path());
@@ -617,6 +673,22 @@ static void apply_dolphin_xr_camera_forward_zero() {
     backup_file_once(path);
     apply_ini_section_values(path, "VR", {{"CameraForward", "0."}}, {});
     app_hook_log(L"Applied Dolphin XR CameraForward = 0.");
+}
+
+static void disable_unmanaged_dolphin_codes_in(const fs::path& path) {
+    if (path.empty())
+        return;
+
+    backup_file_once(path);
+    apply_ini_section_values(path, "Core", {{"EnableCheats", "False"}}, {});
+    disable_ini_section_entries(path, "ActionReplay_Enabled");
+    disable_ini_section_entries(path, "Gecko_Enabled");
+    app_hook_log(L"Disabled unmanaged Dolphin AR/Gecko enabled codes in " + path.wstring());
+}
+
+static void disable_unmanaged_dolphin_codes() {
+    disable_unmanaged_dolphin_codes_in(dolphin_gm8e01_settings_path());
+    disable_unmanaged_dolphin_codes_in(dolphin_gm8e01_vr_settings_path());
 }
 
 static std::vector<LoadedPatch> load_app_patch_files() {
@@ -950,6 +1022,10 @@ static Pose pose_from_shared(const PrimedGun::PoseState& in) {
     out.qy = in.orientation.y;
     out.qz = in.orientation.z;
     out.qw = in.orientation.w;
+    out.trigger_click = (in.buttons & kButtonTriggerClick) != 0 || in.angularVelocityRadiansPerSecond.x > 0.5f;
+    out.thumbstick_click = (in.buttons & kButtonThumbstickClick) != 0 || in.angularVelocityRadiansPerSecond.y > 0.5f;
+    out.button_a = (in.buttons & kButtonA) != 0;
+    out.button_b = (in.buttons & kButtonB) != 0;
     out.valid = true;
     return out;
 }
@@ -1012,6 +1088,166 @@ static bool get_dolphinxr_hmd_pose(Pose& hmd) {
 
     hmd = pose_from_shared(shared_hmd);
     return hmd.valid;
+}
+
+static void rotate_pose_vector(const Pose& pose, float x, float y, float z, float& ox, float& oy, float& oz) {
+    const float tx = 2.0f * (pose.qy * z - pose.qz * y);
+    const float ty = 2.0f * (pose.qz * x - pose.qx * z);
+    const float tz = 2.0f * (pose.qx * y - pose.qy * x);
+    ox = x + pose.qw * tx + (pose.qy * tz - pose.qz * ty);
+    oy = y + pose.qw * ty + (pose.qz * tx - pose.qx * tz);
+    oz = z + pose.qw * tz + (pose.qx * ty - pose.qy * tx);
+}
+
+static bool vr_settings_pointer_hit(const Pose& left, const Pose& right, float& x_out, float& y_out) {
+    if (!left.valid || !right.valid)
+        return false;
+
+    Pose panel = left;
+    panel.qx = left.qx * 0.70710678f - left.qw * 0.70710678f;
+    panel.qy = left.qy * 0.70710678f - left.qz * 0.70710678f;
+    panel.qz = left.qz * 0.70710678f + left.qy * 0.70710678f;
+    panel.qw = left.qw * 0.70710678f + left.qx * 0.70710678f;
+
+    float ox, oy, oz;
+    rotate_pose_vector(panel, 0.0f, 0.10f, -0.18f, ox, oy, oz);
+    const float cx = left.px + ox;
+    const float cy = left.py + oy;
+    const float cz = left.pz + oz;
+
+    float rx, ry, rz, ux, uy, uz, nx, ny, nz, dx, dy, dz;
+    rotate_pose_vector(panel, 1.0f, 0.0f, 0.0f, rx, ry, rz);
+    rotate_pose_vector(panel, 0.0f, 1.0f, 0.0f, ux, uy, uz);
+    rotate_pose_vector(panel, 0.0f, 0.0f, 1.0f, nx, ny, nz);
+    rotate_pose_vector(right, 0.0f, 0.0f, -1.0f, dx, dy, dz);
+
+    const float denom = dx * nx + dy * ny + dz * nz;
+    if (std::fabs(denom) < 0.001f)
+        return false;
+
+    const float vx = cx - right.px;
+    const float vy = cy - right.py;
+    const float vz = cz - right.pz;
+    const float t = (vx * nx + vy * ny + vz * nz) / denom;
+    if (t < 0.02f || t > 3.0f)
+        return false;
+
+    const float hx = right.px + dx * t - cx;
+    const float hy = right.py + dy * t - cy;
+    const float hz = right.pz + dz * t - cz;
+    x_out = 0.5f + (hx * rx + hy * ry + hz * rz) / 1.05f;
+    y_out = 0.5f - (hx * ux + hy * uy + hz * uz) / 0.72f;
+    return x_out >= 0.0f && x_out <= 1.0f && y_out >= 0.0f && y_out <= 1.0f;
+}
+
+static constexpr uint32_t k_vr_settings_item_count = 31;
+
+static std::chrono::steady_clock::time_point g_vr_settings_saved_notice_until{};
+
+static void change_vr_setting(uint32_t index, bool increase) {
+    const float sign = increase ? 1.0f : -1.0f;
+    switch (index) {
+    case 0:
+        g_settings.save();
+        g_vr_settings_saved_notice_until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        app_hook_log(L"VR settings saved from in-headset menu.");
+        return;
+    case 1: g_settings.reset_all(); break;
+    case 2: g_settings.use_right_hand = !g_settings.use_right_hand; break;
+    case 3: g_settings.require_trigger = !g_settings.require_trigger; break;
+    case 4: g_settings.trigger_threshold = std::clamp(g_settings.trigger_threshold + sign * 0.05f, 0.0f, 1.0f); break;
+    case 5: g_settings.world_scale = std::clamp(g_settings.world_scale + sign * 0.5f, 1.0f, 50.0f); break;
+    case 6: g_settings.offset_x = std::clamp(g_settings.offset_x + sign * 0.01f, -2.0f, 2.0f); break;
+    case 7: g_settings.offset_y = std::clamp(g_settings.offset_y + sign * 0.01f, -2.0f, 2.0f); break;
+    case 8: g_settings.offset_z = std::clamp(g_settings.offset_z + sign * 0.01f, -2.0f, 2.0f); break;
+    case 9:
+        g_settings.offset_x = kDefaultOffsetX;
+        g_settings.offset_y = kDefaultOffsetY;
+        g_settings.offset_z = kDefaultOffsetZ;
+        break;
+    case 10: g_settings.rot_offset_x = std::clamp(g_settings.rot_offset_x + sign * 0.5f, -180.0f, 180.0f); break;
+    case 11: g_settings.rot_offset_y = std::clamp(g_settings.rot_offset_y + sign * 0.5f, -180.0f, 180.0f); break;
+    case 12: g_settings.rot_offset_z = std::clamp(g_settings.rot_offset_z + sign * 0.5f, -180.0f, 180.0f); break;
+    case 13:
+        g_settings.rot_offset_x = kDefaultRotOffsetX;
+        g_settings.rot_offset_y = kDefaultRotOffsetY;
+        g_settings.rot_offset_z = kDefaultRotOffsetZ;
+        break;
+    case 14: g_settings.gun_targeting_enabled = !g_settings.gun_targeting_enabled; break;
+    case 15: g_settings.gun_targeting_distance = std::clamp(g_settings.gun_targeting_distance + sign * 1.0f, 10.0f, 120.0f); break;
+    case 16: g_settings.gun_targeting_radius = std::clamp(g_settings.gun_targeting_radius + sign * 0.1f, 0.5f, 8.0f); break;
+    case 17:
+        g_settings.gun_targeting_enabled = kDefaultGunTargetingEnabled;
+        g_settings.gun_targeting_distance = kDefaultGunTargetingDistance;
+        g_settings.gun_targeting_radius = kDefaultGunTargetingRadius;
+        break;
+    case 18: g_settings.auto_dolphin_xr_controls = !g_settings.auto_dolphin_xr_controls; break;
+    case 19: g_settings.xr_dpad_enabled = !g_settings.xr_dpad_enabled; break;
+    case 20: g_settings.xr_dpad_head_radius = std::clamp(g_settings.xr_dpad_head_radius + sign * 0.01f, 0.08f, 0.28f); break;
+    case 21: g_settings.xr_dpad_head_y_below = std::clamp(g_settings.xr_dpad_head_y_below + sign * 0.01f, 0.02f, 0.25f); break;
+    case 22: g_settings.xr_dpad_deadzone = std::clamp(g_settings.xr_dpad_deadzone + sign * 0.01f, 0.20f, 0.80f); break;
+    case 23:
+        g_settings.xr_dpad_enabled = kDefaultXrDpadEnabled;
+        g_settings.xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
+        g_settings.xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
+        g_settings.xr_dpad_deadzone = kDefaultXrDpadDeadzone;
+        g_settings.xr_dpad_stick_axis = kDefaultXrDpadStickAxis;
+        break;
+    case 24: g_settings.directional_movement_enabled = !g_settings.directional_movement_enabled; break;
+    case 25: g_settings.directional_movement_use_right_stick = !g_settings.directional_movement_use_right_stick; break;
+    case 26: g_settings.directional_movement_deadzone = std::clamp(g_settings.directional_movement_deadzone + sign * 0.01f, 0.05f, 0.80f); break;
+    case 27: g_settings.directional_movement_speed = std::clamp(g_settings.directional_movement_speed + sign * 0.25f, 4.0f, 30.0f); break;
+    case 28: g_settings.directional_movement_accel = std::clamp(g_settings.directional_movement_accel + sign * 1.0f, 5.0f, 120.0f); break;
+    case 29: g_settings.directional_movement_air_accel = std::clamp(g_settings.directional_movement_air_accel + sign * 0.5f, 0.0f, 60.0f); break;
+    case 30:
+        g_settings.directional_movement_enabled = kDefaultDirectionalMovementEnabled;
+        g_settings.directional_movement_use_right_stick = kDefaultDirectionalMovementUseRightStick;
+        g_settings.directional_movement_deadzone = kDefaultDirectionalMovementDeadzone;
+        g_settings.directional_movement_speed = kDefaultDirectionalMovementSpeed;
+        g_settings.directional_movement_accel = kDefaultDirectionalMovementAccel;
+        g_settings.directional_movement_air_accel = kDefaultDirectionalMovementAirAccel;
+        break;
+    default: break;
+    }
+    g_settings.save();
+}
+
+static void sync_vr_settings_to_shared(uint32_t generation, bool visible, uint32_t selected, bool pointerActive, float pointerX, float pointerY) {
+    if (!g_shared_state)
+        return;
+    auto& s = g_shared_state->settings;
+    s.vrMenuVisible = visible ? 1u : 0u;
+    s.vrMenuGeneration = generation;
+    s.vrMenuSelectedIndex = selected;
+    s.vrMenuItemCount = k_vr_settings_item_count;
+    s.vrMenuPointerActive = pointerActive ? 1u : 0u;
+    s.vrMenuSavedNotice = std::chrono::steady_clock::now() < g_vr_settings_saved_notice_until ? 1u : 0u;
+    s.vrMenuPointerX = pointerX;
+    s.vrMenuPointerY = pointerY;
+    s.useRightHand = g_settings.use_right_hand ? 1u : 0u;
+    s.requireTrigger = g_settings.require_trigger ? 1u : 0u;
+    s.triggerThreshold = g_settings.trigger_threshold;
+    s.worldScale = g_settings.world_scale;
+    s.offsetX = g_settings.offset_x;
+    s.offsetY = g_settings.offset_y;
+    s.offsetZ = g_settings.offset_z;
+    s.rotOffsetX = g_settings.rot_offset_x;
+    s.rotOffsetY = g_settings.rot_offset_y;
+    s.rotOffsetZ = g_settings.rot_offset_z;
+    s.gunTargetingEnabled = g_settings.gun_targeting_enabled ? 1u : 0u;
+    s.gunTargetingDistance = g_settings.gun_targeting_distance;
+    s.gunTargetingRadius = g_settings.gun_targeting_radius;
+    s.autoDolphinXrControls = g_settings.auto_dolphin_xr_controls ? 1u : 0u;
+    s.xrDpadEnabled = g_settings.xr_dpad_enabled ? 1u : 0u;
+    s.xrDpadHeadRadius = g_settings.xr_dpad_head_radius;
+    s.xrDpadHeadYBelow = g_settings.xr_dpad_head_y_below;
+    s.xrDpadDeadzone = g_settings.xr_dpad_deadzone;
+    s.directionalMovementEnabled = g_settings.directional_movement_enabled ? 1u : 0u;
+    s.directionalMovementUseRightStick = g_settings.directional_movement_use_right_stick ? 1u : 0u;
+    s.directionalMovementDeadzone = g_settings.directional_movement_deadzone;
+    s.directionalMovementSpeed = g_settings.directional_movement_speed;
+    s.directionalMovementAccel = g_settings.directional_movement_accel;
+    s.directionalMovementAirAccel = g_settings.directional_movement_air_accel;
 }
 
 static bool ensure_dolphin_hook_loaded() {
@@ -1161,6 +1397,16 @@ static void update_game_revision_detection() {
     } else {
         g_app.game_status = "Load game: wrong game";
     }
+}
+
+static bool prime_game_is_loaded_in_ram() {
+    if (!g_dolphin.is_connected())
+        return false;
+
+    const uint32_t id0 = g_dolphin.read_u32(0x80000000);
+    const uint16_t id1 = g_dolphin.read_u16(0x80000004);
+    const uint8_t revision = g_dolphin.read_u8(0x80000007);
+    return id0 == 0x474D3845u && id1 == 0x3031u && revision == 0; // "GM8E01", rev 0
 }
 
 enum XrDpadDir {
@@ -1803,6 +2049,207 @@ static bool player_is_first_person_gun_ready(uint32_t player) {
     if (!std::isfinite(gun_alpha) || gun_alpha < 0.95f) return false;
     if (holster_state != 2) return false; // CPlayer::EGunHolsterState::Drawn
     return true;
+}
+
+static bool player_is_prompt_gameplay_ready(uint32_t player) {
+    if (!player_is_first_person_gun_ready(player))
+        return false;
+
+    const uint8_t input_flags = g_dolphin.read_u8(player + k_player_disable_input_flags_offset);
+    if ((input_flags & k_player_disable_input_mask) != 0)
+        return false;
+
+    constexpr uint32_t k_player_movement_state_offset = 0x258;
+    const uint32_t movement_state = g_dolphin.read_u32(player + k_player_movement_state_offset);
+    return movement_state <= 6;
+}
+
+static void mark_cannon_transform_not_ready() {
+    g_cannon_transform_ready_frames.store(0, std::memory_order_relaxed);
+    g_last_cannon_transform_player.store(0, std::memory_order_relaxed);
+    g_last_cannon_transform_gun.store(0, std::memory_order_relaxed);
+}
+
+static void mark_cannon_transform_ready(uint32_t player, uint32_t gun_ptr) {
+    const uint32_t previous_player = g_last_cannon_transform_player.load(std::memory_order_relaxed);
+    const uint32_t previous_gun = g_last_cannon_transform_gun.load(std::memory_order_relaxed);
+    uint32_t frames = 1;
+    if (previous_player == player && previous_gun == gun_ptr) {
+        frames = std::min<uint32_t>(g_cannon_transform_ready_frames.load(std::memory_order_relaxed) + 1, 1000);
+    }
+
+    g_last_cannon_transform_player.store(player, std::memory_order_relaxed);
+    g_last_cannon_transform_gun.store(gun_ptr, std::memory_order_relaxed);
+    g_cannon_transform_ready_frames.store(frames, std::memory_order_relaxed);
+    g_last_cannon_transform_write_ms.store(GetTickCount64(), std::memory_order_relaxed);
+}
+
+static bool cannon_transform_is_gameplay_ready(uint32_t player) {
+    if (player < 0x80000000)
+        return false;
+
+    const uint64_t last_ms = g_last_cannon_transform_write_ms.load(std::memory_order_relaxed);
+    if (last_ms == 0 || GetTickCount64() - last_ms > 500)
+        return false;
+
+    if (g_last_cannon_transform_player.load(std::memory_order_relaxed) != player)
+        return false;
+
+    return g_cannon_transform_ready_frames.load(std::memory_order_relaxed) >= 30;
+}
+
+struct PromptGateSnapshot {
+    uint32_t player = 0;
+    uint32_t camera_state = 0xffffffff;
+    uint32_t morph_state = 0xffffffff;
+    uint32_t movement_state = 0xffffffff;
+    uint32_t holster_state = 0xffffffff;
+    uint32_t free_look_word = 0xffffffff;
+    uint8_t input_flags = 0xff;
+    uint8_t final_held0 = 0xff;
+    uint8_t final_pressed0 = 0xff;
+    float gun_alpha = 0.0f;
+};
+
+static PromptGateSnapshot read_prompt_gate_snapshot(uint32_t player) {
+    PromptGateSnapshot s;
+    s.player = player;
+    if (player < 0x80000000)
+        return s;
+
+    constexpr uint32_t k_player_movement_state_offset = 0x258;
+    s.camera_state = g_dolphin.read_u32(player + 0x2f4);
+    s.morph_state = g_dolphin.read_u32(player + 0x2f8);
+    s.movement_state = g_dolphin.read_u32(player + k_player_movement_state_offset);
+    s.gun_alpha = g_dolphin.read_float(player + 0x494);
+    s.holster_state = g_dolphin.read_u32(player + 0x498);
+    s.input_flags = g_dolphin.read_u8(player + k_player_disable_input_flags_offset);
+    s.free_look_word = g_dolphin.read_u32(player + k_player_free_look_state_offset);
+    s.final_held0 = g_dolphin.read_u8(player + k_final_input_dpad_held_0);
+    s.final_pressed0 = g_dolphin.read_u8(player + k_final_input_dpad_pressed_0);
+    return s;
+}
+
+static void log_prompt_gate_snapshot(const PromptGateSnapshot& s,
+                                     bool ready,
+                                     bool cannon_ready,
+                                     bool stable,
+                                     bool show,
+                                     std::chrono::steady_clock::time_point now) {
+    static bool last_ready = false;
+    static bool last_cannon_ready = false;
+    static bool last_stable = false;
+    static bool last_show = false;
+    static uint32_t last_player = 0;
+    static auto last_log = std::chrono::steady_clock::time_point{};
+
+    const bool changed = ready != last_ready || cannon_ready != last_cannon_ready ||
+                         stable != last_stable || show != last_show || s.player != last_player;
+    const bool valid_player = s.player >= 0x80000000;
+    const bool periodic =
+        last_log.time_since_epoch().count() == 0 ||
+        ((show || valid_player) &&
+         std::chrono::duration_cast<std::chrono::milliseconds>(now - last_log).count() >= 2000);
+    if (!changed && !periodic)
+        return;
+
+    std::wstringstream ss;
+    ss << L"Prompt gate: ready=" << (ready ? 1 : 0)
+       << L" cannon=" << (cannon_ready ? 1 : 0)
+       << L" cannonFrames=" << g_cannon_transform_ready_frames.load(std::memory_order_relaxed)
+       << L" stable=" << (stable ? 1 : 0)
+       << L" show=" << (show ? 1 : 0)
+       << L" player=" << hex32(s.player)
+       << L" cam=" << s.camera_state
+       << L" morph=" << s.morph_state
+       << L" move=" << s.movement_state
+       << L" holster=" << s.holster_state
+       << L" alpha=" << s.gun_alpha
+       << L" inputFlags=" << hex32(s.input_flags)
+       << L" freeLook=" << hex32(s.free_look_word)
+       << L" held0=" << hex32(s.final_held0)
+       << L" pressed0=" << hex32(s.final_pressed0);
+    app_hook_log(ss.str());
+
+    last_ready = ready;
+    last_cannon_ready = cannon_ready;
+    last_stable = stable;
+    last_show = show;
+    last_player = s.player;
+    last_log = now;
+}
+
+static void log_gameplay_candidate_profile(uint32_t state_mgr,
+                                           uint32_t player,
+                                           bool player_ready,
+                                           bool cannon_ready,
+                                           bool stable,
+                                           bool show,
+                                           std::chrono::steady_clock::time_point now) {
+    static uint32_t last_player = 0;
+    static auto profile_until = std::chrono::steady_clock::time_point{};
+    static auto last_profile_log = std::chrono::steady_clock::time_point{};
+
+    if (player != last_player) {
+        last_player = player;
+        last_profile_log = {};
+        profile_until = player >= 0x80000000 ? now + std::chrono::seconds(45)
+                                             : std::chrono::steady_clock::time_point{};
+    }
+    if (player < 0x80000000 || profile_until.time_since_epoch().count() == 0 || now > profile_until)
+        return;
+    if (last_profile_log.time_since_epoch().count() != 0 &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - last_profile_log).count() < 500)
+        return;
+    last_profile_log = now;
+
+    const auto addrs = get_addresses();
+    const uint32_t gun_ptr = g_dolphin.read_u32(player + addrs.cannon_offset);
+    const uint32_t gun_xf = gun_ptr >= 0x80000000 ? gun_ptr + addrs.gun_xf_offset : 0;
+    const uint32_t world_xf = gun_ptr >= 0x80000000 ? gun_ptr + addrs.world_xf_offset : 0;
+    const bool gun_chain_valid = gun_ptr >= 0x80000000 &&
+        looks_like_transform_matrix(gun_xf) && looks_like_transform_matrix(world_xf);
+
+    float px = 0.0f, py = 0.0f, pz = 0.0f;
+    float gx = 0.0f, gy = 0.0f, gz = 0.0f;
+    read_transform_translation(player + 0x34, px, py, pz);
+    if (world_xf >= 0x80000000)
+        read_transform_translation(world_xf, gx, gy, gz);
+
+    std::wstringstream ss;
+    ss << L"Gameplay profile: player=" << hex32(player)
+       << L" ready=" << (player_ready ? 1 : 0)
+       << L" cannon=" << (cannon_ready ? 1 : 0)
+       << L" stable=" << (stable ? 1 : 0)
+       << L" show=" << (show ? 1 : 0)
+       << L" cam=" << g_dolphin.read_u32(player + 0x2f4)
+       << L" morph=" << g_dolphin.read_u32(player + 0x2f8)
+       << L" move=" << g_dolphin.read_u32(player + 0x258)
+       << L" scan=" << g_dolphin.read_u32(player + 0x330)
+       << L" free=" << hex32(g_dolphin.read_u32(player + k_player_free_look_state_offset))
+       << L" alpha=" << g_dolphin.read_float(player + 0x494)
+       << L" holster=" << g_dolphin.read_u32(player + 0x498)
+       << L" flags=" << hex32(g_dolphin.read_u8(player + k_player_disable_input_flags_offset))
+       << L" p24C=" << hex32(g_dolphin.read_u32(player + 0x24c))
+       << L" p250=" << hex32(g_dolphin.read_u32(player + 0x250))
+       << L" p254=" << hex32(g_dolphin.read_u32(player + 0x254))
+       << L" p25C=" << hex32(g_dolphin.read_u32(player + 0x25c))
+       << L" p260=" << hex32(g_dolphin.read_u32(player + 0x260))
+       << L" p300=" << hex32(g_dolphin.read_u32(player + 0x300))
+       << L" p304=" << hex32(g_dolphin.read_u32(player + 0x304))
+       << L" p308=" << hex32(g_dolphin.read_u32(player + 0x308))
+       << L" p4A0=" << hex32(g_dolphin.read_u32(player + 0x4a0))
+       << L" p4A4=" << hex32(g_dolphin.read_u32(player + 0x4a4))
+       << L" p4A8=" << hex32(g_dolphin.read_u32(player + 0x4a8))
+       << L" held0=" << hex32(g_dolphin.read_u8(player + k_final_input_dpad_held_0))
+       << L" held1=" << hex32(g_dolphin.read_u8(player + k_final_input_dpad_held_1))
+       << L" press0=" << hex32(g_dolphin.read_u8(player + k_final_input_dpad_pressed_0))
+       << L" stateHeld0=" << hex32(state_mgr >= 0x80000000 ? g_dolphin.read_u8(state_mgr + k_final_input_dpad_held_0) : 0xff)
+       << L" gun=" << hex32(gun_ptr)
+       << L" gunChain=" << (gun_chain_valid ? 1 : 0)
+       << L" playerPos=" << px << L"," << py << L"," << pz
+       << L" gunPos=" << gx << L"," << gy << L"," << gz;
+    app_hook_log(ss.str());
 }
 
 static bool player_is_first_person_unmorphed(uint32_t player) {
@@ -2702,6 +3149,7 @@ static void write_gun_matrix(const Matrix3x4& mat) {
     const uint32_t player = g_dolphin.read_u32(state_mgr + addrs.player_offset);
     g_app.dbg_player = player;
     if (player < 0x80000000) {
+        mark_cannon_transform_not_ready();
         reset_lock_camera_pitch_suppression();
         return;
     }
@@ -2717,6 +3165,7 @@ static void write_gun_matrix(const Matrix3x4& mat) {
     g_app.dbg_cannon_rot_valid = false;
     g_app.dbg_gun_target_write = false;
     if (!player_is_first_person_gun_ready(player)) {
+        mark_cannon_transform_not_ready();
         reset_lock_camera_pitch_suppression();
         disarm_memory_writes();
         return;
@@ -2743,9 +3192,11 @@ static void write_gun_matrix(const Matrix3x4& mat) {
             looks_like_transform_matrix(world_xf) &&
             looks_like_transform_matrix(local_xf);
         if (!gun_chain_valid) {
+            mark_cannon_transform_not_ready();
             disarm_memory_writes();
             return;
         }
+        mark_cannon_transform_ready(player, gun_ptr);
         if (addrs.gun_pos >= 0x80000000) {
             g_dolphin.write_float(addrs.gun_pos + 0, g_smooth_mat[3]);
             g_dolphin.write_float(addrs.gun_pos + 4, g_smooth_mat[7]);
@@ -2772,6 +3223,7 @@ static void write_gun_matrix(const Matrix3x4& mat) {
         extract_basis9(g_smooth_mat, g_last_written_basis);
         g_last_written_basis_valid = true;
     } else {
+        mark_cannon_transform_not_ready();
         disarm_memory_writes();
         return;
     }
@@ -3037,6 +3489,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     open_app_hook_log();
     apply_dolphin_vr_units_per_meter();
     apply_dolphin_xr_camera_forward_zero();
+    disable_unmanaged_dolphin_codes();
     sync_dolphin_xr_gamecube_controls(g_settings.auto_dolphin_xr_controls);
     if (find_process_id_by_name(L"Dolphin.exe")) {
         MessageBoxW(nullptr,
@@ -3152,6 +3605,185 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
         g_app.dolphin_status = g_dolphin.status();
         const bool has_shared_state = open_live_shared_state() && g_shared_state;
+        if (has_shared_state) {
+            g_shared_state->appHeartbeat++;
+            static bool vr_settings_visible = false;
+            static bool last_left_thumb_click = false;
+            static bool last_right_select = false;
+            static uint32_t vr_settings_selected = 0;
+            static uint32_t vr_settings_generation = 1;
+            static auto last_vr_menu_toggle_time = std::chrono::steady_clock::time_point{};
+            Pose vr_left_pose = {};
+            Pose vr_right_pose = {};
+            {
+                std::lock_guard<std::mutex> lock(g_pose_mutex);
+                vr_left_pose = g_latest_left_pose;
+                vr_right_pose = g_settings.use_right_hand ? g_latest_pose : g_latest_left_pose;
+            }
+            if (g_shared_state->trackingRuntimeActive) {
+                vr_left_pose = pose_from_shared(g_shared_state->leftHandPose);
+                vr_left_pose.trigger = g_shared_state->leftHandPose.linearVelocityMetersPerSecond.x;
+                vr_left_pose.stick_x = g_shared_state->leftHandPose.linearVelocityMetersPerSecond.y;
+                vr_left_pose.stick_y = g_shared_state->leftHandPose.linearVelocityMetersPerSecond.z;
+                vr_right_pose = pose_from_shared(g_shared_state->rightHandPose);
+                vr_right_pose.trigger = g_shared_state->rightHandPose.linearVelocityMetersPerSecond.x;
+                vr_right_pose.stick_x = g_shared_state->rightHandPose.linearVelocityMetersPerSecond.y;
+                vr_right_pose.stick_y = g_shared_state->rightHandPose.linearVelocityMetersPerSecond.z;
+            }
+            const bool left_thumb_click = vr_left_pose.valid && vr_left_pose.thumbstick_click;
+            static bool last_logged_left_thumb_click = false;
+            if (left_thumb_click != last_logged_left_thumb_click) {
+                app_hook_log(std::wstring(L"VR settings left thumbstick click ") +
+                    (left_thumb_click ? L"pressed." : L"released."));
+                last_logged_left_thumb_click = left_thumb_click;
+            }
+            const bool toggle_debounced =
+                last_vr_menu_toggle_time.time_since_epoch().count() == 0 ||
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - last_vr_menu_toggle_time).count() >= 450;
+            if (left_thumb_click && !last_left_thumb_click && toggle_debounced) {
+                last_vr_menu_toggle_time = now;
+                vr_settings_visible = !vr_settings_visible;
+                ++vr_settings_generation;
+                app_hook_log(std::wstring(L"VR settings menu ") + (vr_settings_visible ? L"opened." : L"closed."));
+            }
+            last_left_thumb_click = left_thumb_click;
+
+            float menu_pointer_x = 0.5f;
+            float menu_pointer_y = 0.5f;
+            const bool menu_pointer_active = vr_settings_visible &&
+                vr_settings_pointer_hit(vr_left_pose, vr_right_pose, menu_pointer_x, menu_pointer_y);
+            if (menu_pointer_active) {
+                constexpr float firstY = 86.0f / 512.0f;
+                constexpr float stepY = 25.0f / 512.0f;
+                constexpr int rowsPerColumn = 16;
+                const int column = menu_pointer_x >= 0.5f ? 1 : 0;
+                int row = static_cast<int>((menu_pointer_y - firstY + stepY * 0.5f) / stepY);
+                row = std::clamp(row, 0, rowsPerColumn - 1);
+                int hovered = column * rowsPerColumn + row;
+                hovered = std::clamp(hovered, 0, static_cast<int>(k_vr_settings_item_count) - 1);
+                if (vr_settings_selected != static_cast<uint32_t>(hovered)) {
+                    vr_settings_selected = static_cast<uint32_t>(hovered);
+                    ++vr_settings_generation;
+                }
+            }
+            const bool right_select = vr_right_pose.valid &&
+                (vr_right_pose.button_a || vr_right_pose.trigger_click);
+            if (vr_settings_visible && menu_pointer_active && right_select && !last_right_select) {
+                constexpr float textureWidth = 1024.0f;
+                constexpr float leftX = 28.0f;
+                constexpr float rightX = 524.0f;
+                constexpr float rowWidth = 472.0f;
+                constexpr float valueWidth = 126.0f;
+                constexpr float valueBoxOffset = rowWidth - valueWidth - 10.0f;
+                const float pointerX = std::clamp(menu_pointer_x, 0.0f, 1.0f) * textureWidth;
+                const float columnX = vr_settings_selected >= 16 ? rightX : leftX;
+                const float valueBoxX = columnX + valueBoxOffset;
+                if (pointerX >= valueBoxX && pointerX <= valueBoxX + valueWidth) {
+                    change_vr_setting(vr_settings_selected, pointerX >= valueBoxX + valueWidth * 0.5f);
+                    ++vr_settings_generation;
+                }
+            }
+            last_right_select = right_select;
+            sync_vr_settings_to_shared(vr_settings_generation, vr_settings_visible, vr_settings_selected,
+                                       menu_pointer_active, menu_pointer_x, menu_pointer_y);
+
+            static auto gameplay_ready_since = std::chrono::steady_clock::time_point{};
+            static auto first_prompt_ready_timeout_until = std::chrono::steady_clock::time_point{};
+            static auto alignment_prompt_show_until = std::chrono::steady_clock::time_point{};
+            static auto game_session_inactive_since = std::chrono::steady_clock::time_point{};
+            static bool skipped_first_prompt_ready = false;
+            static bool waiting_for_second_prompt_ready = false;
+            static bool alignment_prompt_shown_this_launch = false;
+            static bool game_loaded_session_active = false;
+            const auto addrs = get_addresses();
+            const uint32_t state_mgr = addrs.state_manager;
+            uint32_t player = 0;
+            if (g_app.active && g_app.dolphin_ok && state_mgr >= 0x80000000) {
+                player = g_dolphin.read_u32(state_mgr + addrs.player_offset);
+            }
+            const bool game_loaded_in_ram = prime_game_is_loaded_in_ram();
+            if (game_loaded_in_ram) {
+                game_session_inactive_since = {};
+                if (!game_loaded_session_active) {
+                    game_loaded_session_active = true;
+                    alignment_prompt_shown_this_launch = false;
+                    skipped_first_prompt_ready = false;
+                    waiting_for_second_prompt_ready = false;
+                    first_prompt_ready_timeout_until = {};
+                    alignment_prompt_show_until = {};
+                    gameplay_ready_since = {};
+                    app_hook_log(L"Prompt gate: game loaded in RAM; alignment prompt re-armed.");
+                }
+            } else {
+                if (game_loaded_session_active && game_session_inactive_since.time_since_epoch().count() == 0) {
+                    game_session_inactive_since = now;
+                }
+                if (game_session_inactive_since.time_since_epoch().count() != 0 &&
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - game_session_inactive_since).count() >= 2000) {
+                    game_loaded_session_active = false;
+                    alignment_prompt_shown_this_launch = false;
+                    skipped_first_prompt_ready = false;
+                    waiting_for_second_prompt_ready = false;
+                    first_prompt_ready_timeout_until = {};
+                    alignment_prompt_show_until = {};
+                    gameplay_ready_since = {};
+                    app_hook_log(L"Prompt gate: game unloaded from RAM; prompt session cleared.");
+                }
+            }
+            const PromptGateSnapshot prompt_gate = read_prompt_gate_snapshot(player);
+            const bool player_ready_for_prompt = player_is_prompt_gameplay_ready(player);
+            const bool cannon_ready_for_prompt = cannon_transform_is_gameplay_ready(player);
+            const bool gameplay_ready_for_prompt = player_ready_for_prompt && cannon_ready_for_prompt;
+            if (gameplay_ready_for_prompt) {
+                if (gameplay_ready_since.time_since_epoch().count() == 0) {
+                    gameplay_ready_since = now;
+                }
+            } else {
+                gameplay_ready_since = {};
+            }
+
+            const bool gameplay_ready_stable =
+                gameplay_ready_since.time_since_epoch().count() != 0 &&
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - gameplay_ready_since).count() >= 1200;
+            if (!game_loaded_in_ram) {
+                skipped_first_prompt_ready = false;
+                waiting_for_second_prompt_ready = false;
+                first_prompt_ready_timeout_until = {};
+                alignment_prompt_show_until = {};
+            }
+
+            bool show_alignment_prompt = gameplay_ready_stable;
+            if (gameplay_ready_stable && !skipped_first_prompt_ready) {
+                skipped_first_prompt_ready = true;
+                waiting_for_second_prompt_ready = true;
+                first_prompt_ready_timeout_until = now + std::chrono::seconds(10);
+                show_alignment_prompt = false;
+                app_hook_log(L"Prompt gate: skipped first ready window; waiting 10 seconds for gameplay.");
+            } else if (waiting_for_second_prompt_ready) {
+                show_alignment_prompt = false;
+                if (first_prompt_ready_timeout_until.time_since_epoch().count() != 0 &&
+                    now >= first_prompt_ready_timeout_until) {
+                    waiting_for_second_prompt_ready = false;
+                    show_alignment_prompt = gameplay_ready_stable;
+                    app_hook_log(L"Prompt gate: first ready window timeout expired; stable ready can show prompt.");
+                }
+            }
+            if (alignment_prompt_shown_this_launch) {
+                show_alignment_prompt =
+                    alignment_prompt_show_until.time_since_epoch().count() != 0 &&
+                    now < alignment_prompt_show_until;
+            } else if (show_alignment_prompt) {
+                alignment_prompt_shown_this_launch = true;
+                alignment_prompt_show_until = now + std::chrono::seconds(10);
+                app_hook_log(L"Prompt gate: alignment prompt consumed for this game session.");
+            }
+            g_shared_state->settings.showAlignmentPrompt = show_alignment_prompt ? 1u : 0u;
+            log_gameplay_candidate_profile(state_mgr, player, player_ready_for_prompt,
+                                           cannon_ready_for_prompt, gameplay_ready_stable,
+                                           show_alignment_prompt, now);
+            log_prompt_gate_snapshot(prompt_gate, player_ready_for_prompt, cannon_ready_for_prompt,
+                                     gameplay_ready_stable, show_alignment_prompt, now);
+        }
         static uint64_t last_hook_heartbeat_seen = 0;
         static auto last_hook_heartbeat_time = std::chrono::steady_clock::time_point{};
         if (has_shared_state && g_shared_state->hookHeartbeat != last_hook_heartbeat_seen) {

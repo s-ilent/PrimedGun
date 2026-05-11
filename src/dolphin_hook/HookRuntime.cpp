@@ -46,6 +46,7 @@ DWORD WINAPI RuntimeThread(void*) {
 
     GameTimingHooks::Install();
     JitHooks::Install();
+    GraphicsHooks::Install();
     OpenXrHooks::InstallIfAvailable(shared.Get());
     Log(L"PrimedGun hook runtime is active inside Dolphin.");
 
@@ -57,6 +58,7 @@ DWORD WINAPI RuntimeThread(void*) {
         if (now - lastMaintenanceTick >= 250) {
             lastMaintenanceTick = now;
             shared.Heartbeat();
+            GraphicsHooks::PollBackendModules(shared.Get());
             GameTimingHooks::Poll(shared.Get());
             OpenXrHooks::Poll(shared.Get());
             JitHooks::Poll();
@@ -71,6 +73,7 @@ DWORD WINAPI RuntimeThread(void*) {
     }
 
     OpenXrHooks::Shutdown();
+    GraphicsHooks::Shutdown();
     GameTimingHooks::Shutdown();
     JitHooks::Shutdown();
     Log(L"PrimedGun hook runtime stopped.");

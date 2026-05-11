@@ -1,6 +1,6 @@
 # PrimedGun
 
-Dolphin OpenXR-side VR enhancement mod for Metroid Prime running in Dolphin.
+PrimedGun is a Dolphin OpenXR-side VR enhancement app for Metroid Prime running in Dolphin. It reads OpenXR tracking through a Dolphin hook, writes the arm cannon and input state into game memory, and applies the small set of game patches PrimedGun needs while the game is loaded.
 
 ## Requirements
 
@@ -9,7 +9,7 @@ Dolphin OpenXR-side VR enhancement mod for Metroid Prime running in Dolphin.
 - A C++ compiler toolchain
 - OpenXR SDK headers at `C:\OpenXR-SDK`
 - Dolphin running Metroid Prime GCN NTSC Rev 0 (`GM8E01`)
-(built and tested with Dolphin-OpenXR 2512-421 -dirty)
+- Built and tested with Dolphin-OpenXR 2512-421 -dirty
 
 ## Build
 
@@ -28,6 +28,7 @@ For distribution/share, the useful files are:
 
 - `PrimedGun.exe`
 - `PrimedGun_DolphinHook.dll`
+- `assets\gecko\GM8E01_PrimedGun.ini`
 - `libgcc_s_seh-1.dll`
 - `libstdc++-6.dll`
 - `libwinpthread-1.dll`
@@ -40,15 +41,50 @@ For distribution/share, the useful files are:
 - Visor hand gesture input: the app reads the control stick as visor D-pad input when the controller is near your head.
 - Improved gun-based lock/scan targeting.
 - VR arm cannon tracking through Dolphin-side OpenXR.
-- Dolphin-side hook bridge for app-owned game patches and diagnostics.
+- In-headset settings menu anchored to the left controller.
+- Dolphin-side hook bridge for app-owned game patches, OpenXR tracking, overlays, and diagnostics.
+- Automatic Dolphin XR setup for the GM8E01 VR settings PrimedGun expects.
+
+## Dolphin Setup
+
+PrimedGun configures the Dolphin pieces it needs at startup where possible:
+
+- Sets the GM8E01 Dolphin XR camera forward offset to `0`.
+- Sets the GM8E01 Dolphin XR world scale / units-per-meter value used by PrimedGun.
+- Can map Dolphin's Port 1 controls and reset-view hotkey to OpenXR when the setting is enabled.
+- Disables unmanaged Dolphin Action Replay and Gecko enabled-code lists so old user codes do not fight PrimedGun.
+
+PrimedGun does not delete old user code definitions. It only turns off enabled entries in Dolphin's normal AR/Gecko enabled lists and uses its own hook-owned patch file instead.
+
+## App-Owned Patches
+
+The hook loads PrimedGun patches from:
+
+```text
+assets\gecko\GM8E01_PrimedGun.ini
+```
+
+These patches are owned by PrimedGun and are applied through the hook, not through Dolphin's normal user-managed AR/Gecko enabled-code flow. Current patch areas include culling, VR rotation restore, lock/scan targeting, visor input support, and arm cannon idle fidget disable.
 
 ## Usage
 
 1. Launch `PrimedGun.exe`.
-2. Load Metroid Prime in Dolphin.
-3. PrimedGun will check then start.
-4. While in game use y offset setting in PrimedGun to align cannon height,
-click the right thumb stick and move your body to center view with arm cannon correctly.
+2. Load Metroid Prime GCN NTSC Rev 0 (`GM8E01`) in Dolphin.
+3. PrimedGun detects the game when GM8E01 is loaded into memory.
+4. When gameplay and cannon tracking are ready, an in-headset prompt appears once for that game memory load.
+5. Move your body and click the right stick to align controller with cannon.
+
+The alignment prompt can show again after the game is unloaded from memory and loaded again. Dolphin itself does not need to be closed.
+
+## VR Settings Menu
+
+- Click the left thumbstick to open or close the in-headset settings menu.
+- The menu is attached to the left controller.
+- Aim with the right-controller laser.
+- Use right trigger or A to change the pointed-at setting.
+- Use `Save Settings` to write `primedgun_settings.ini`.
+- Use `Reset All Settings` to restore PrimedGun defaults.
+- Each settings tab also has its own reset row.
 
 ## Notes
 
@@ -57,6 +93,7 @@ click the right thumb stick and move your body to center view with arm cannon co
 - The app reads controller tracking from Dolphin-side OpenXR and writes the cannon transform into Dolphin memory.
 - PrimedGun should be running before Metroid Prime is loaded so the Dolphin-side hook is ready as soon as GM8E01 memory appears.
 - For the best experience, try not to turn your body around. You can move in the game like this, but functionality is not ideal.
+
 For further enhancements to your VR experience, join the Dolphin VR Discord.
 
 - By Nobbie
