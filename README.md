@@ -55,6 +55,14 @@ PrimedGun configures the Dolphin pieces it needs at startup where possible:
 - Can map Dolphin's Port 1 controls and reset-view hotkey to OpenXR when the setting is enabled.
 - Disables unmanaged Dolphin Action Replay and Gecko enabled-code lists so old user codes do not fight PrimedGun.
 
+PrimedGun writes its Dolphin defaults into the GM8E01 profile files it can find:
+
+- `C:\Users\<user>\Documents\Dolphin Emulator\GameSettingsVR\GM8E01.ini`
+- `C:\Users\<user>\Documents\Dolphin Emulator\GameSettings\GM8E01.ini`
+- Portable Dolphin profiles beside `Dolphin.exe`, such as `User\GameSettingsVR\GM8E01.ini` and `User\GameSettings\GM8E01.ini`
+
+The VR profile is where PrimedGun saves the GM8E01 VR settings and pre-configured shader overrides. The normal game profile is used to disable unmanaged AR/Gecko enabled-code lists so PrimedGun's app-owned patch set is the one in control.
+
 ## App-Owned Patches
 
 The hook loads PrimedGun patches from:
@@ -87,7 +95,7 @@ The alignment prompt can show again after the game is unloaded from memory and l
 ## Notes
 
 - Settings are saved to `primedgun_settings.ini`.
-- PrimedGun currently expects Dolphin's user config at `C:\Users\<user>\Documents\Dolphin Emulator\...` for temporary controller/hotkey setup.
+- Temporary controller and hotkey setup is written to Dolphin's normal Documents config files under `C:\Users\<user>\Documents\Dolphin Emulator\Config\...`.
 - The app reads controller tracking from Dolphin-side OpenXR and writes the cannon transform into Dolphin memory.
 - PrimedGun should be running before Metroid Prime is loaded so the Dolphin-side hook is ready as soon as GM8E01 memory appears.
 - For the best experience, try not to turn your body around. You can move in the game like this, but functionality is not ideal.
