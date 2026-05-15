@@ -748,6 +748,7 @@ static void restore_dolphin_borrowed_controls() {
     g_last_auto_dolphin_xr_controls = false;
 }
 
+static std::vector<fs::path> dolphin_gm8e01_settings_paths();
 static std::vector<fs::path> dolphin_gm8e01_vr_settings_paths();
 
 static void apply_dolphin_vr_units_per_meter() {
@@ -821,8 +822,10 @@ static void disable_unmanaged_dolphin_codes_in(const fs::path& path) {
 }
 
 static void disable_unmanaged_dolphin_codes() {
-    disable_unmanaged_dolphin_codes_in(dolphin_gm8e01_settings_path());
-    disable_unmanaged_dolphin_codes_in(dolphin_gm8e01_vr_settings_path());
+    for (const fs::path& path : dolphin_gm8e01_settings_paths())
+        disable_unmanaged_dolphin_codes_in(path);
+    for (const fs::path& path : dolphin_gm8e01_vr_settings_paths())
+        disable_unmanaged_dolphin_codes_in(path);
 }
 
 static std::optional<DWORD> find_process_id_by_name(const wchar_t* exe_name);
@@ -863,6 +866,41 @@ static void add_unique_path(std::vector<fs::path>& paths, const fs::path& path) 
 }
 
 
+static void add_dolphin_game_settings_paths(std::vector<fs::path>& paths,
+                                            const fs::path& dolphin_exe,
+                                            const wchar_t* folder_name) {
+    if (dolphin_exe.empty())
+        return;
+
+    const fs::path exe_dir = dolphin_exe.parent_path();
+    add_unique_path(paths, exe_dir / L"User" / folder_name / L"GM8E01.ini");
+    add_unique_path(paths, exe_dir / folder_name / L"GM8E01.ini");
+
+    if (exe_dir.has_parent_path()) {
+        const fs::path parent = exe_dir.parent_path();
+        add_unique_path(paths, parent / L"User" / folder_name / L"GM8E01.ini");
+        add_unique_path(paths, parent / folder_name / L"GM8E01.ini");
+    }
+}
+
+
+static std::vector<fs::path> dolphin_gm8e01_settings_paths() {
+    std::vector<fs::path> paths;
+    add_unique_path(paths, dolphin_gm8e01_settings_path());
+
+    const std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
+    if (!dolphin_pid)
+        return paths;
+
+    const std::optional<fs::path> dolphin_path = dolphin_process_path(*dolphin_pid);
+    if (!dolphin_path)
+        return paths;
+
+    add_dolphin_game_settings_paths(paths, *dolphin_path, L"GameSettings");
+    return paths;
+}
+
+
 static std::vector<fs::path> dolphin_gm8e01_vr_settings_paths() {
     std::vector<fs::path> paths;
     add_unique_path(paths, dolphin_gm8e01_vr_settings_path());
@@ -875,10 +913,7 @@ static std::vector<fs::path> dolphin_gm8e01_vr_settings_paths() {
     if (!dolphin_path)
         return paths;
 
-    const fs::path exe_dir = dolphin_path->parent_path();
-    add_unique_path(paths, exe_dir / L"GameSettingsVR" / L"GM8E01.ini");
-    if (exe_dir.has_parent_path())
-        add_unique_path(paths, exe_dir.parent_path() / L"GameSettingsVR" / L"GM8E01.ini");
+    add_dolphin_game_settings_paths(paths, *dolphin_path, L"GameSettingsVR");
     return paths;
 }
 
@@ -1527,13 +1562,11 @@ static void apply_helmet_opacity_zero() {
     if (current == 0)
         return;
 
-    if (current <= 0xff) {
-        g_dolphin.write_u32(helmet_alpha_addr, 0);
-        static uint32_t last_logged_game_state = 0;
-        if (last_logged_game_state != game_state) {
-            last_logged_game_state = game_state;
-            app_hook_log(L"PrimedGun set Helmet Opacity to 0 for game state " + hex32(game_state) + L".");
-        }
+    g_dolphin.write_u32(helmet_alpha_addr, 0);
+    static uint32_t last_logged_game_state = 0;
+    if (last_logged_game_state != game_state) {
+        last_logged_game_state = game_state;
+        app_hook_log(L"PrimedGun set Helmet Opacity to 0 for game state " + hex32(game_state) + L".");
     }
 }
     
@@ -4200,7 +4233,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             g_app.active = false;
             g_app.dolphin_ok = false;
             g_dolphin.disconnect();
+            apply_dolphin_vr_units_per_meter();
             apply_primedgun_vr_shader_profile();
+            disable_unmanaged_dolphin_codes();
             ensure_dolphin_hook_loaded();
             g_app.dolphin_ok = g_dolphin.connect();
             g_app.dolphin_status = g_dolphin.status();
@@ -4229,7 +4264,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             last_dolphin_auto_connect = now;
             const std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
             if (dolphin_pid && *dolphin_pid != last_auto_hook_pid) {
+                apply_dolphin_vr_units_per_meter();
                 apply_primedgun_vr_shader_profile();
+                disable_unmanaged_dolphin_codes();
                 ensure_dolphin_hook_loaded();
                 last_auto_hook_pid = *dolphin_pid;
             } else if (!dolphin_pid) {
