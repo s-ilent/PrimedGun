@@ -4409,6 +4409,14 @@ static void writer_thread() {
 
 static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
+    if (msg == WM_GETMINMAXINFO) {
+        RECT min_window{0, 0, 700, 720};
+        AdjustWindowRect(&min_window, WS_OVERLAPPEDWINDOW, FALSE);
+        MINMAXINFO* minmax = reinterpret_cast<MINMAXINFO*>(lParam);
+        minmax->ptMinTrackSize.x = min_window.right - min_window.left;
+        minmax->ptMinTrackSize.y = min_window.bottom - min_window.top;
+        return 0;
+    }
     if (msg == WM_SIZE && g_device && g_swapchain && wParam != SIZE_MINIMIZED) {
         cleanup_render_target();
         g_swapchain->ResizeBuffers(
@@ -4488,7 +4496,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     };
     RegisterClassExW(&wc);
 
-    const DWORD window_style = WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX;
+    const DWORD window_style = WS_OVERLAPPEDWINDOW;
     RECT window_rect{0, 0, 700, 720};
     AdjustWindowRect(&window_rect, window_style, FALSE);
 

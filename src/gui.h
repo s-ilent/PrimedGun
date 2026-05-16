@@ -88,38 +88,50 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
 {
     (void)dolphin;
 
-    const float deck_width = 700.0f;
-    const float deck_height = 720.0f;
-    const bool compact = deck_width < 650.0f;
-    const float label_column = compact ? 145.0f : 190.0f;
-    const float input_width = compact ? 96.0f : 112.0f;
-    const float header_height = compact ? 208.0f : 182.0f;
-    const float footer_height = 48.0f;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    constexpr float base_width = 700.0f;
+    constexpr float base_height = 720.0f;
+    const float deck_width = std::max(base_width, viewport->WorkSize.x);
+    const float deck_height = std::max(base_height, viewport->WorkSize.y);
+    const float ui_scale = std::clamp(
+        std::min(deck_width / base_width, deck_height / base_height),
+        1.0f, 2.0f);
+    const auto scaled = [ui_scale](float value) { return value * ui_scale; };
+    const float logical_width = deck_width / ui_scale;
+    const bool compact = logical_width < 650.0f;
+    const float label_column = scaled(compact ? 145.0f : 190.0f);
+    const float input_width = scaled(compact ? 96.0f : 112.0f);
+    const float header_height = scaled(compact ? 208.0f : 182.0f);
+    const float footer_height = scaled(48.0f);
 
     const ImVec4 accent = ImVec4(0.95f, 0.64f, 0.22f, 1.0f);
     const ImVec4 ok = ImVec4(0.20f, 0.78f, 0.44f, 1.0f);
     const ImVec4 warn = ImVec4(0.95f, 0.34f, 0.28f, 1.0f);
     const ImVec4 muted = ImVec4(0.58f, 0.62f, 0.67f, 1.0f);
 
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(deck_width, deck_height), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(scaled(14.0f), scaled(12.0f)));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(scaled(9.0f), scaled(5.0f)));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(scaled(9.0f), scaled(7.0f)));
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, scaled(13.0f));
     ImGui::Begin("PrimedGun Control Deck", nullptr,
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+    ImGui::SetWindowFontScale(ui_scale);
 
     auto status_pill = [&](const char* label, const char* value, bool healthy) {
         const ImVec2 start = ImGui::GetCursorScreenPos();
-        const float badge_width = 116.0f;
-        const float badge_height = 24.0f;
+        const float badge_width = scaled(116.0f);
+        const float badge_height = scaled(24.0f);
         ImDrawList* draw = ImGui::GetWindowDrawList();
         const ImU32 fill = ImGui::ColorConvertFloat4ToU32(
             healthy ? ImVec4(0.10f, 0.30f, 0.18f, 1.0f) : ImVec4(0.34f, 0.12f, 0.11f, 1.0f));
         const ImU32 border = ImGui::ColorConvertFloat4ToU32(
             healthy ? ImVec4(0.18f, 0.58f, 0.32f, 1.0f) : ImVec4(0.70f, 0.22f, 0.18f, 1.0f));
-        draw->AddRectFilled(start, ImVec2(start.x + badge_width, start.y + badge_height), fill, 5.0f);
-        draw->AddRect(start, ImVec2(start.x + badge_width, start.y + badge_height), border, 5.0f);
-        draw->AddText(ImVec2(start.x + 10.0f, start.y + 4.0f),
+        draw->AddRectFilled(start, ImVec2(start.x + badge_width, start.y + badge_height), fill, scaled(5.0f));
+        draw->AddRect(start, ImVec2(start.x + badge_width, start.y + badge_height), border, scaled(5.0f));
+        draw->AddText(ImVec2(start.x + scaled(10.0f), start.y + scaled(4.0f)),
                       ImGui::ColorConvertFloat4ToU32(ImVec4(0.92f, 0.94f, 0.96f, 1.0f)), label);
         ImGui::Dummy(ImVec2(badge_width, badge_height));
         ImGui::SameLine();
@@ -144,7 +156,7 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(label);
         ImGui::SameLine(label_column);
-        ImGui::SetNextItemWidth(-input_width - 34.0f);
+        ImGui::SetNextItemWidth(-input_width - scaled(34.0f));
         ImGui::SliderFloat("##slider", value, min, max, fmt);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(input_width);
@@ -154,13 +166,13 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
 
     auto metric_float = [&](const char* label, float value, const char* suffix = "") {
         ImGui::TextColored(muted, "%s", label);
-        ImGui::SameLine(compact ? 116.0f : 145.0f);
+        ImGui::SameLine(scaled(compact ? 116.0f : 145.0f));
         ImGui::Text("%.2f%s", value, suffix);
     };
 
     auto metric_int = [&](const char* label, int value) {
         ImGui::TextColored(muted, "%s", label);
-        ImGui::SameLine(compact ? 116.0f : 145.0f);
+        ImGui::SameLine(scaled(compact ? 116.0f : 145.0f));
         ImGui::Text("%d", value);
     };
 
@@ -172,12 +184,12 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
     ImGui::TextDisabled("Metroid Prime GCN NTSC Rev 0 (GM8E01)");
 
     if (!compact)
-        ImGui::SameLine(std::max(0.0f, ImGui::GetContentRegionAvail().x - 214.0f));
+        ImGui::SameLine(std::max(0.0f, ImGui::GetContentRegionAvail().x - scaled(214.0f)));
     ImGui::PushStyleColor(ImGuiCol_Button, app.active ? ImVec4(0.12f, 0.45f, 0.22f, 1.0f)
                                                       : ImVec4(0.48f, 0.14f, 0.12f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, app.active ? ImVec4(0.16f, 0.56f, 0.28f, 1.0f)
                                                              : ImVec4(0.60f, 0.19f, 0.16f, 1.0f));
-    if (ImGui::Button(app.active ? "Active - Stop" : "Inactive - Start", ImVec2(170, 34))) {
+    if (ImGui::Button(app.active ? "Active - Stop" : "Inactive - Start", ImVec2(scaled(170.0f), scaled(34.0f)))) {
         if (app.active) {
             app.active = false;
             app.manually_paused.store(true, std::memory_order_relaxed);
@@ -200,7 +212,7 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
 
     ImGui::BeginChild("##content", ImVec2(0, -footer_height), 0, ImGuiWindowFlags_HorizontalScrollbar);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 5.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(scaled(10.0f), scaled(5.0f)));
     if (ImGui::BeginTabBar("##primedgun_tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
         if (ImGui::BeginTabItem("Game")) {
             begin_panel("##game_panel", "Game Connection", 0.0f);
@@ -283,7 +295,7 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted("Stick axis");
             ImGui::SameLine(label_column);
-            ImGui::SetNextItemWidth(160.0f);
+            ImGui::SetNextItemWidth(scaled(160.0f));
             ImGui::SliderInt("##stick_axis", &s.xr_dpad_stick_axis, -1, 4);
             s.xr_dpad_head_radius = std::clamp(s.xr_dpad_head_radius, 0.08f, 0.28f);
             s.xr_dpad_head_y_below = std::clamp(s.xr_dpad_head_y_below, 0.02f, 0.25f);
@@ -468,7 +480,7 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
         ImGui::OpenPopup("Saved!");
     }
     if (!compact)
-        ImGui::SameLine(std::max(320.0f, ImGui::GetContentRegionAvail().x - 145.0f));
+        ImGui::SameLine(std::max(scaled(320.0f), ImGui::GetContentRegionAvail().x - scaled(145.0f)));
     ImGui::TextDisabled("By Nobbie  v%s", PRIMEDGUN_VERSION_STRING);
 
     if (ImGui::BeginPopup("Saved!")) {
@@ -477,4 +489,5 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
     }
 
     ImGui::End();
+    ImGui::PopStyleVar(4);
 }
