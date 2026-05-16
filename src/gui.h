@@ -1,11 +1,13 @@
 #pragma once
+
 #include "imgui.h"
 #include "settings.h"
 #include "dolphin_memory.h"
 #include "tracking_math.h"
+
+#include <algorithm>
 #include <atomic>
 #include <string>
-#include <algorithm>
 
 struct AppState {
     bool  active        = false;
@@ -70,300 +72,409 @@ struct AppState {
     bool     dbg_directional_move_active = false;
     float    dbg_directional_move_yaw_deg = 0.0f;
     float    dbg_directional_move_stick_mag = 0.0f;
+    std::atomic<bool> manually_paused = false;
     std::atomic<bool> recenter_requested = true;
     std::atomic<bool> reconnect_dolphin_requested = false;
     std::atomic<bool> reconnect_tracking_requested = false;
     std::atomic<bool> remap_dolphin_controls_requested = false;
     std::atomic<bool> dolphin_performance_apply_requested = false;
     std::atomic<bool> shader_profile_apply_requested = false;
+    ImTextureID controller_layout_texture = ImTextureID_Invalid;
+    int controller_layout_width = 0;
+    int controller_layout_height = 0;
 };
 
-inline void draw_gui(Settings& s, AppState& app,
-                     DolphinMemory& dolphin)
+inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
 {
-    constexpr float UI_SCALE = 0.9f; // 10% slimmer
+    (void)dolphin;
 
-    // ── Status bar ───────────────────────────
-    ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
-    ImGui::SetNextWindowSize({500 * UI_SCALE, 96}, ImGuiCond_Always);
+    const float deck_width = 700.0f;
+    const float deck_height = 720.0f;
+    const bool compact = deck_width < 650.0f;
+    const float label_column = compact ? 145.0f : 190.0f;
+    const float input_width = compact ? 96.0f : 112.0f;
+    const float header_height = compact ? 208.0f : 182.0f;
+    const float footer_height = 48.0f;
 
-    ImGui::Begin("##status", nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
+    const ImVec4 accent = ImVec4(0.95f, 0.64f, 0.22f, 1.0f);
+    const ImVec4 ok = ImVec4(0.20f, 0.78f, 0.44f, 1.0f);
+    const ImVec4 warn = ImVec4(0.95f, 0.34f, 0.28f, 1.0f);
+    const ImVec4 muted = ImVec4(0.58f, 0.62f, 0.67f, 1.0f);
 
-    ImGui::TextColored(
-        app.tracking_ok ? ImVec4(0,1,0,1) : ImVec4(1,0.3f,0.3f,1),
-        "Tracking: %s", app.tracking_status.c_str());
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(deck_width, deck_height), ImGuiCond_Always);
+    ImGui::Begin("PrimedGun Control Deck", nullptr,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
-    ImGui::Text("%s", app.hook_status.c_str());
-
-    ImGui::TextColored(
-        app.game_rev0_ok ? ImVec4(0,1,0,1) : ImVec4(1,0.3f,0.3f,1),
-        "%s", app.game_status.c_str());
-
-    ImGui::End();
-
-    // ── Main window ──────────────────────────
-    ImGui::SetNextWindowPos({0, 96}, ImGuiCond_Once);
-    ImGui::SetNextWindowSize({520 * UI_SCALE, 600}, ImGuiCond_Once);
-
-    ImGui::Begin("PrimedGun Settings");
-
-    float full_width = ImGui::GetContentRegionAvail().x;
-
-    auto SliderInput = [&](const char* label, float* v,
-                           float min, float max,
-                           float step, float fast,
-                           const char* fmt)
-    {
-        ImGui::Text("%s", label);
-        ImGui::PushID(label);
-
-        ImGui::SetNextItemWidth(-100);
-        ImGui::SliderFloat("##s", v, min, max);
-
+    auto status_pill = [&](const char* label, const char* value, bool healthy) {
+        const ImVec2 start = ImGui::GetCursorScreenPos();
+        const float badge_width = 116.0f;
+        const float badge_height = 24.0f;
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const ImU32 fill = ImGui::ColorConvertFloat4ToU32(
+            healthy ? ImVec4(0.10f, 0.30f, 0.18f, 1.0f) : ImVec4(0.34f, 0.12f, 0.11f, 1.0f));
+        const ImU32 border = ImGui::ColorConvertFloat4ToU32(
+            healthy ? ImVec4(0.18f, 0.58f, 0.32f, 1.0f) : ImVec4(0.70f, 0.22f, 0.18f, 1.0f));
+        draw->AddRectFilled(start, ImVec2(start.x + badge_width, start.y + badge_height), fill, 5.0f);
+        draw->AddRect(start, ImVec2(start.x + badge_width, start.y + badge_height), border, 5.0f);
+        draw->AddText(ImVec2(start.x + 10.0f, start.y + 4.0f),
+                      ImGui::ColorConvertFloat4ToU32(ImVec4(0.92f, 0.94f, 0.96f, 1.0f)), label);
+        ImGui::Dummy(ImVec2(badge_width, badge_height));
         ImGui::SameLine();
+        ImGui::TextColored(healthy ? ok : warn, "%s", value);
+    };
 
-        ImGui::SetNextItemWidth(90);
-        ImGui::InputFloat("##i", v, step, fast, fmt);
+    auto begin_panel = [&](const char* id, const char* title, float height = 0.0f) {
+        ImGui::BeginChild(id, ImVec2(0, height), ImGuiChildFlags_Borders);
+        ImGui::TextColored(accent, "%s", title);
+        ImGui::Separator();
+    };
 
+    auto end_panel = [&]() {
+        ImGui::EndChild();
+    };
+
+    auto slider_input = [&](const char* label, float* value,
+                            float min, float max,
+                            float step, float fast,
+                            const char* fmt) {
+        ImGui::PushID(label);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine(label_column);
+        ImGui::SetNextItemWidth(-input_width - 34.0f);
+        ImGui::SliderFloat("##slider", value, min, max, fmt);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(input_width);
+        ImGui::InputFloat("##input", value, step, fast, fmt);
         ImGui::PopID();
     };
 
-    // ── Enable ───────────────────────────────
-    ImGui::PushStyleColor(ImGuiCol_Button,
-        app.active ? ImVec4(0.2f,0.7f,0.2f,1) : ImVec4(0.7f,0.2f,0.2f,1));
+    auto metric_float = [&](const char* label, float value, const char* suffix = "") {
+        ImGui::TextColored(muted, "%s", label);
+        ImGui::SameLine(compact ? 116.0f : 145.0f);
+        ImGui::Text("%.2f%s", value, suffix);
+    };
 
-    if (ImGui::Button(app.active ? "ACTIVE - Click to Stop" : "INACTIVE - Click to Start",
-                      {full_width, 40})) {
-        app.active = !app.active;
-        if (app.active)
+    auto metric_int = [&](const char* label, int value) {
+        ImGui::TextColored(muted, "%s", label);
+        ImGui::SameLine(compact ? 116.0f : 145.0f);
+        ImGui::Text("%d", value);
+    };
+
+    ImGui::BeginChild("##header", ImVec2(0, header_height), ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::TextColored(accent, "PrimedGun");
+    ImGui::SameLine();
+    ImGui::TextDisabled("v%s", PRIMEDGUN_VERSION_STRING);
+    ImGui::TextDisabled("Metroid Prime GCN NTSC Rev 0 (GM8E01)");
+
+    if (!compact)
+        ImGui::SameLine(std::max(0.0f, ImGui::GetContentRegionAvail().x - 214.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, app.active ? ImVec4(0.12f, 0.45f, 0.22f, 1.0f)
+                                                      : ImVec4(0.48f, 0.14f, 0.12f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, app.active ? ImVec4(0.16f, 0.56f, 0.28f, 1.0f)
+                                                             : ImVec4(0.60f, 0.19f, 0.16f, 1.0f));
+    if (ImGui::Button(app.active ? "Active - Stop" : "Inactive - Start", ImVec2(170, 34))) {
+        if (app.active) {
+            app.active = false;
+            app.manually_paused.store(true, std::memory_order_relaxed);
+        } else {
+            app.active = true;
+            app.manually_paused.store(false, std::memory_order_relaxed);
             app.recenter_requested.store(true, std::memory_order_relaxed);
+        }
     }
+    ImGui::PopStyleColor(2);
 
-    ImGui::PopStyleColor();
+    ImGui::Spacing();
+    status_pill("Tracking", app.tracking_status.c_str(), app.tracking_ok);
+    status_pill("Hook", app.hook_status.c_str(),
+                app.hook_status.find("attached") != std::string::npos);
+    status_pill("Game", app.game_status.c_str(), app.game_rev0_ok);
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+
+    ImGui::BeginChild("##content", ImVec2(0, -footer_height), 0, ImGuiWindowFlags_HorizontalScrollbar);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 5.0f));
+    if (ImGui::BeginTabBar("##primedgun_tabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
+        if (ImGui::BeginTabItem("Game")) {
+            begin_panel("##game_panel", "Game Connection", 0.0f);
+            ImGui::Text("Target: Metroid Prime GCN NTSC Rev 0 (GM8E01)");
+            ImGui::TextColored(app.game_rev0_ok ? ok : warn, "%s", app.game_status.c_str());
+            ImGui::Spacing();
+            if (ImGui::Button("Reconnect Dolphin")) {
+                app.reconnect_dolphin_requested.store(true, std::memory_order_relaxed);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reconnect Hook")) {
+                app.reconnect_tracking_requested.store(true, std::memory_order_relaxed);
+            }
+            ImGui::Spacing();
+            ImGui::TextDisabled("Runtime status");
+            ImGui::BulletText("%s", app.dolphin_status.c_str());
+            ImGui::BulletText("%s", app.hook_status.c_str());
+            ImGui::BulletText("Tracking: %s", app.tracking_status.c_str());
+            end_panel();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Dolphin Settings")) {
+            begin_panel("##dolphin_panel", "Dolphin Profile");
+            const bool old_dolphin_60fps_cap = s.dolphin_60fps_cap;
+            ImGui::Checkbox("Limit Dolphin to 60 FPS", &s.dolphin_60fps_cap);
+            if (s.dolphin_60fps_cap != old_dolphin_60fps_cap) {
+                app.dolphin_performance_apply_requested.store(true, std::memory_order_relaxed);
+            }
+
+            const bool old_shader_overrides_enabled = s.shader_overrides_enabled;
+            ImGui::Checkbox("Use PrimedGun shader overrides", &s.shader_overrides_enabled);
+            if (s.shader_overrides_enabled != old_shader_overrides_enabled) {
+                app.shader_profile_apply_requested.store(true, std::memory_order_relaxed);
+            }
+            ImGui::Spacing();
+            ImGui::TextDisabled("Applied to Dolphin's active GM8E01 VR profile.");
+            end_panel();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Controller")) {
+            begin_panel("##controller_panel", "Controller Mapping");
+            if (ImGui::Button("Reset Controller")) {
+                s.use_right_hand = kDefaultUseRightHand;
+                s.auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
+                s.dolphin_60fps_cap = kDefaultDolphin60FpsCap;
+                s.xr_dpad_enabled = kDefaultXrDpadEnabled;
+                s.xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
+                s.xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
+                s.xr_dpad_deadzone = kDefaultXrDpadDeadzone;
+                s.xr_dpad_stick_axis = kDefaultXrDpadStickAxis;
+                s.directional_movement_enabled = kDefaultDirectionalMovementEnabled;
+                s.directional_movement_use_right_stick = kDefaultDirectionalMovementUseRightStick;
+                s.directional_movement_deadzone = kDefaultDirectionalMovementDeadzone;
+                s.directional_movement_speed = kDefaultDirectionalMovementSpeed;
+                s.directional_movement_accel = kDefaultDirectionalMovementAccel;
+                s.directional_movement_air_accel = kDefaultDirectionalMovementAirAccel;
+                app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
+                app.dolphin_performance_apply_requested.store(true, std::memory_order_relaxed);
+            }
+
+            int hand = s.use_right_hand ? 0 : 1;
+            ImGui::RadioButton("Right hand", &hand, 0);
+            ImGui::SameLine();
+            ImGui::RadioButton("Left hand", &hand, 1);
+            s.use_right_hand = (hand == 0);
+
+            const bool old_auto_dolphin_xr_controls = s.auto_dolphin_xr_controls;
+            ImGui::Checkbox("Temporarily map Dolphin Port 1 to OpenXR", &s.auto_dolphin_xr_controls);
+            if (s.auto_dolphin_xr_controls != old_auto_dolphin_xr_controls) {
+                app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
+            }
+
+            ImGui::SeparatorText("Left hand D-pad");
+            ImGui::Checkbox("Enable visor gesture input", &s.xr_dpad_enabled);
+            slider_input("Head radius", &s.xr_dpad_head_radius, 0.08f, 0.28f, 0.01f, 0.05f, "%.2f");
+            slider_input("Below head", &s.xr_dpad_head_y_below, 0.02f, 0.25f, 0.01f, 0.05f, "%.2f");
+            slider_input("Stick deadzone", &s.xr_dpad_deadzone, 0.2f, 0.8f, 0.01f, 0.1f, "%.2f");
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Stick axis");
+            ImGui::SameLine(label_column);
+            ImGui::SetNextItemWidth(160.0f);
+            ImGui::SliderInt("##stick_axis", &s.xr_dpad_stick_axis, -1, 4);
+            s.xr_dpad_head_radius = std::clamp(s.xr_dpad_head_radius, 0.08f, 0.28f);
+            s.xr_dpad_head_y_below = std::clamp(s.xr_dpad_head_y_below, 0.02f, 0.25f);
+            s.xr_dpad_deadzone = std::clamp(s.xr_dpad_deadzone, 0.2f, 0.8f);
+            s.xr_dpad_stick_axis = std::clamp(s.xr_dpad_stick_axis, -1, 4);
+
+            ImGui::SeparatorText("Directional Movement");
+            ImGui::Checkbox("Offhand yaw strafing", &s.directional_movement_enabled);
+            int move_stick = s.directional_movement_use_right_stick ? 1 : 0;
+            ImGui::RadioButton("Left stick", &move_stick, 0);
+            ImGui::SameLine();
+            ImGui::RadioButton("Right stick", &move_stick, 1);
+            s.directional_movement_use_right_stick = (move_stick == 1);
+            slider_input("Movement deadzone", &s.directional_movement_deadzone, 0.05f, 0.8f, 0.01f, 0.1f, "%.2f");
+            slider_input("Movement speed", &s.directional_movement_speed, 4.0f, 30.0f, 0.25f, 1.0f, "%.2f");
+            slider_input("Movement accel", &s.directional_movement_accel, 5.0f, 120.0f, 1.0f, 5.0f, "%.1f");
+            slider_input("Air accel", &s.directional_movement_air_accel, 0.0f, 60.0f, 0.5f, 2.0f, "%.1f");
+            s.directional_movement_deadzone = std::clamp(s.directional_movement_deadzone, 0.05f, 0.8f);
+            s.directional_movement_speed = std::clamp(s.directional_movement_speed, 4.0f, 30.0f);
+            s.directional_movement_accel = std::clamp(s.directional_movement_accel, 5.0f, 120.0f);
+            s.directional_movement_air_accel = std::clamp(s.directional_movement_air_accel, 0.0f, 60.0f);
+            end_panel();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Aiming")) {
+            begin_panel("##aiming_panel", "Aiming");
+            if (ImGui::Button("Reset Aiming")) {
+                s.gun_targeting_enabled = kDefaultGunTargetingEnabled;
+                s.gun_targeting_distance = kDefaultGunTargetingDistance;
+                s.gun_targeting_radius = kDefaultGunTargetingRadius;
+            }
+            ImGui::Checkbox("Gun selects lock/scan target", &s.gun_targeting_enabled);
+            slider_input("Target distance", &s.gun_targeting_distance, 10.0f, 120.0f, 1.0f, 5.0f, "%.1f");
+            slider_input("Target radius", &s.gun_targeting_radius, 0.5f, 8.0f, 0.1f, 0.5f, "%.1f");
+            s.gun_targeting_distance = std::clamp(s.gun_targeting_distance, 10.0f, 120.0f);
+            s.gun_targeting_radius = std::clamp(s.gun_targeting_radius, 0.5f, 8.0f);
+            ImGui::SeparatorText("Live Target");
+            ImGui::Text("UID %04X  Object %08X  Write %s",
+                        app.dbg_gun_target_uid, app.dbg_gun_target_obj,
+                        app.dbg_gun_target_write ? "yes" : "no");
+            ImGui::Text("Ray %.2f forward  %.2f off  candidates %d",
+                        app.dbg_gun_target_along, app.dbg_gun_target_perp,
+                        app.dbg_gun_target_candidates);
+            end_panel();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Calibration")) {
+            begin_panel("##calibration_panel", "Offset Tuning");
+            ImGui::TextDisabled("Position");
+            slider_input("Left / right", &s.offset_x, -2, 2, 0.01f, 0.1f, "%.3f");
+            slider_input("Up / down", &s.offset_y, -2, 2, 0.01f, 0.1f, "%.3f");
+            slider_input("Forward / back", &s.offset_z, -2, 2, 0.01f, 0.1f, "%.3f");
+
+            ImGui::SeparatorText("Rotation");
+            slider_input("Pitch offset", &s.rot_offset_x, -180, 180, 0.5f, 5.0f, "%.2f");
+            slider_input("Yaw offset", &s.rot_offset_y, -180, 180, 0.5f, 5.0f, "%.2f");
+            slider_input("Roll offset", &s.rot_offset_z, -180, 180, 0.5f, 5.0f, "%.2f");
+
+            ImGui::SeparatorText("Scale");
+            slider_input("World scale", &s.world_scale, 1, 50, 0.5f, 5.0f, "%.2f");
+            s.world_scale = std::clamp(s.world_scale, 1.0f, 50.0f);
+
+            if (ImGui::Button("Reset Position")) {
+                s.offset_x = kDefaultOffsetX;
+                s.offset_y = kDefaultOffsetY;
+                s.offset_z = kDefaultOffsetZ;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset Rotation")) {
+                s.rot_offset_x = kDefaultRotOffsetX;
+                s.rot_offset_y = kDefaultRotOffsetY;
+                s.rot_offset_z = kDefaultRotOffsetZ;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset Scale")) {
+                s.world_scale = kDefaultWorldScale;
+            }
+            end_panel();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Layout")) {
+            begin_panel("##controller_map_panel", "Controller Layout");
+            if (app.controller_layout_texture != ImTextureID_Invalid &&
+                app.controller_layout_width > 0 &&
+                app.controller_layout_height > 0) {
+                const ImVec2 avail = ImGui::GetContentRegionAvail();
+                const float image_aspect =
+                    static_cast<float>(app.controller_layout_width) /
+                    static_cast<float>(app.controller_layout_height);
+                ImVec2 image_size(avail.x, avail.x / image_aspect);
+                if (image_size.y > avail.y) {
+                    image_size.y = avail.y;
+                    image_size.x = avail.y * image_aspect;
+                }
+                image_size.x = std::max(1.0f, image_size.x);
+                image_size.y = std::max(1.0f, image_size.y);
+                const float indent = std::max(0.0f, (avail.x - image_size.x) * 0.5f);
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
+                ImGui::Image(app.controller_layout_texture, image_size);
+            } else {
+                ImGui::TextDisabled("Controller layout image not loaded.");
+            }
+            end_panel();
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Debug")) {
+            begin_panel("##debug_panel", "Debug");
+            ImGui::Checkbox("Show matrix values", &s.show_matrix_debug);
+            ImGui::Checkbox("Show controller pose", &s.show_controller_debug);
+
+            ImGui::SeparatorText("Runtime");
+            metric_float("Tracker poll", app.tracker_poll_ms, " ms");
+            metric_int("Tracker drops", app.tracker_drop_count);
+            metric_float("Writer work", app.writer_work_ms, " ms");
+            metric_float("Writer write", app.writer_write_ms, " ms");
+            metric_int("Writer drops", app.writer_drop_count);
+
+            ImGui::SeparatorText("Input");
+            ImGui::Text("D-pad: %s  dir %d", app.dbg_xr_dpad_active ? "active" : "off", app.dbg_xr_dpad_dir);
+            ImGui::Text("Left stick axis %d: %.2f %.2f", app.dbg_left_stick_axis, app.dbg_left_stick_x, app.dbg_left_stick_y);
+            ImGui::Text("Left-to-head: %.2f m  y %.2f m", app.dbg_left_to_head_dist, app.dbg_left_to_head_y);
+            ImGui::Text("Body yaw: %s  %.1f deg  stick %.2f",
+                        app.dbg_directional_move_active ? "active" : "off",
+                        app.dbg_directional_move_yaw_deg,
+                        app.dbg_directional_move_stick_mag);
+
+            ImGui::SeparatorText("Memory");
+            ImGui::Text("mem_base:  %llX", app.dbg_mem_base);
+            ImGui::Text("state_mgr: %08X", app.dbg_state_mgr);
+            ImGui::Text("player:    %08X", app.dbg_player);
+            ImGui::Text("pitch@:    %08X", app.dbg_pitch_addr);
+            ImGui::Text("cam_mgr:   %08X", app.dbg_cam_mgr);
+            ImGui::Text("gun_ptr:   %08X", app.dbg_gun_ptr);
+            ImGui::Text("gun_xf@:   %08X", app.dbg_gun_xf);
+            ImGui::Text("beam_xf@:  %08X", app.dbg_beam_xf);
+            ImGui::Text("world_xf@: %08X", app.dbg_world_xf);
+            ImGui::Text("local_xf@: %08X", app.dbg_local_xf);
+            ImGui::Text("player yaw: %.2f deg", app.dbg_player_yaw_deg);
+            ImGui::Text("yaw delta:  %.2f deg", app.dbg_player_yaw_delta_deg);
+
+            if (s.show_controller_debug && app.last_pose.valid) {
+                ImGui::SeparatorText("Controller Pose");
+                ImGui::Text("Position: %.3f %.3f %.3f", app.last_pose.px, app.last_pose.py, app.last_pose.pz);
+                ImGui::Text("Rotation: %.3f %.3f %.3f %.3f",
+                            app.last_pose.qx, app.last_pose.qy, app.last_pose.qz, app.last_pose.qw);
+                ImGui::Text("Trigger: %.2f", app.last_pose.trigger);
+            }
+
+            if (s.show_matrix_debug) {
+                auto& m = app.last_matrix;
+                ImGui::SeparatorText("Arm Cannon Matrix");
+                ImGui::Text("[%6.3f %6.3f %6.3f | %8.3f]",
+                    m.at(0,0), m.at(0,1), m.at(0,2), m.at(0,3));
+                ImGui::Text("[%6.3f %6.3f %6.3f | %8.3f]",
+                    m.at(1,0), m.at(1,1), m.at(1,2), m.at(1,3));
+                ImGui::Text("[%6.3f %6.3f %6.3f | %8.3f]",
+                    m.at(2,0), m.at(2,1), m.at(2,2), m.at(2,3));
+            }
+            end_panel();
+            ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
+    }
+    ImGui::PopStyleVar();
+    ImGui::EndChild();
+
     ImGui::Separator();
-
-    // ── Game ────────────────────────────────
-    if (ImGui::CollapsingHeader("Game")) {
-        ImGui::Text("Metroid Prime GCN NTSC Rev 0 (GM8E01)");
-        ImGui::TextColored(
-            app.game_rev0_ok ? ImVec4(0,1,0,1) : ImVec4(1,0.3f,0.3f,1),
-            "%s", app.game_status.c_str());
-
-        if (ImGui::Button("Reconnect Dolphin")) {
-            app.reconnect_dolphin_requested.store(true, std::memory_order_relaxed);
-        }
-
-        ImGui::SameLine();
-
-        if (ImGui::Button("Reconnect Dolphin Hook")) {
-            app.reconnect_tracking_requested.store(true, std::memory_order_relaxed);
-        }
-    }
-
-    if (ImGui::CollapsingHeader("Dolphin Performance")) {
-        const bool old_dolphin_60fps_cap = s.dolphin_60fps_cap;
-        ImGui::Checkbox("Limit Dolphin to 60 FPS", &s.dolphin_60fps_cap);
-        if (s.dolphin_60fps_cap != old_dolphin_60fps_cap) {
-            app.dolphin_performance_apply_requested.store(true, std::memory_order_relaxed);
-        }
-    }
-
-    // ── Controller ─────────────────────────
-    if (ImGui::CollapsingHeader("Controller")) {
-        if (ImGui::Button("Reset Controller")) {
-            s.use_right_hand = kDefaultUseRightHand;
-            s.auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
-            s.dolphin_60fps_cap = kDefaultDolphin60FpsCap;
-            s.xr_dpad_enabled = kDefaultXrDpadEnabled;
-            s.xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
-            s.xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
-            s.xr_dpad_deadzone = kDefaultXrDpadDeadzone;
-            s.xr_dpad_stick_axis = kDefaultXrDpadStickAxis;
-            s.directional_movement_enabled = kDefaultDirectionalMovementEnabled;
-            s.directional_movement_use_right_stick = kDefaultDirectionalMovementUseRightStick;
-            s.directional_movement_deadzone = kDefaultDirectionalMovementDeadzone;
-            s.directional_movement_speed = kDefaultDirectionalMovementSpeed;
-            s.directional_movement_accel = kDefaultDirectionalMovementAccel;
-            s.directional_movement_air_accel = kDefaultDirectionalMovementAirAccel;
-        }
-
-        int hand = s.use_right_hand ? 0 : 1;
-        ImGui::RadioButton("Right hand", &hand, 0); ImGui::SameLine();
-        ImGui::RadioButton("Left hand",  &hand, 1);
-        s.use_right_hand = (hand == 0);
-
-        const bool old_auto_dolphin_xr_controls = s.auto_dolphin_xr_controls;
-        ImGui::Checkbox("Temporarily map Dolphin Port 1 to OpenXR", &s.auto_dolphin_xr_controls);
-        if (s.auto_dolphin_xr_controls != old_auto_dolphin_xr_controls) {
-            app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
-        }
-
-        ImGui::SeparatorText("Left hand D-pad");
-        ImGui::Checkbox("Enable visor gesture input", &s.xr_dpad_enabled);
-        SliderInput("Head radius", &s.xr_dpad_head_radius, 0.08f, 0.28f, 0.01f, 0.05f, "%.2f");
-        SliderInput("Below head", &s.xr_dpad_head_y_below, 0.02f, 0.25f, 0.01f, 0.05f, "%.2f");
-        SliderInput("Stick deadzone", &s.xr_dpad_deadzone, 0.2f, 0.8f, 0.01f, 0.1f, "%.2f");
-        ImGui::SliderInt("Stick axis (-1 auto)", &s.xr_dpad_stick_axis, -1, 4);
-        s.xr_dpad_head_radius = std::clamp(s.xr_dpad_head_radius, 0.08f, 0.28f);
-        s.xr_dpad_head_y_below = std::clamp(s.xr_dpad_head_y_below, 0.02f, 0.25f);
-        s.xr_dpad_deadzone = std::clamp(s.xr_dpad_deadzone, 0.2f, 0.8f);
-        s.xr_dpad_stick_axis = std::clamp(s.xr_dpad_stick_axis, -1, 4);
-        ImGui::Text("D-pad mode: %s  dir: %d", app.dbg_xr_dpad_active ? "active" : "off", app.dbg_xr_dpad_dir);
-        ImGui::Text("left stick axis %d: %.2f %.2f", app.dbg_left_stick_axis, app.dbg_left_stick_x, app.dbg_left_stick_y);
-        ImGui::Text("left-to-head: %.2f m  y %.2f m", app.dbg_left_to_head_dist, app.dbg_left_to_head_y);
-
-        ImGui::SeparatorText("Directional movement");
-        ImGui::Checkbox("Offhand yaw strafing", &s.directional_movement_enabled);
-        int move_stick = s.directional_movement_use_right_stick ? 1 : 0;
-        ImGui::RadioButton("Left stick", &move_stick, 0); ImGui::SameLine();
-        ImGui::RadioButton("Right stick", &move_stick, 1);
-        s.directional_movement_use_right_stick = (move_stick == 1);
-        SliderInput("Movement deadzone", &s.directional_movement_deadzone, 0.05f, 0.8f, 0.01f, 0.1f, "%.2f");
-        SliderInput("Movement speed", &s.directional_movement_speed, 4.0f, 30.0f, 0.25f, 1.0f, "%.2f");
-        SliderInput("Movement accel", &s.directional_movement_accel, 5.0f, 120.0f, 1.0f, 5.0f, "%.1f");
-        SliderInput("Air accel", &s.directional_movement_air_accel, 0.0f, 60.0f, 0.5f, 2.0f, "%.1f");
-        s.directional_movement_deadzone = std::clamp(s.directional_movement_deadzone, 0.05f, 0.8f);
-        s.directional_movement_speed = std::clamp(s.directional_movement_speed, 4.0f, 30.0f);
-        s.directional_movement_accel = std::clamp(s.directional_movement_accel, 5.0f, 120.0f);
-        s.directional_movement_air_accel = std::clamp(s.directional_movement_air_accel, 0.0f, 60.0f);
-        ImGui::Text("body yaw: %s  %.1f deg  stick %.2f",
-                    app.dbg_directional_move_active ? "active" : "off",
-                    app.dbg_directional_move_yaw_deg,
-                    app.dbg_directional_move_stick_mag);
-
-    }
-
-    if (ImGui::CollapsingHeader("Aiming")) {
-        if (ImGui::Button("Reset Aiming")) {
-            s.gun_targeting_enabled = kDefaultGunTargetingEnabled;
-            s.gun_targeting_distance = kDefaultGunTargetingDistance;
-            s.gun_targeting_radius = kDefaultGunTargetingRadius;
-        }
-
-        ImGui::Checkbox("Gun selects lock/scan target", &s.gun_targeting_enabled);
-        SliderInput("Target distance", &s.gun_targeting_distance, 10.0f, 120.0f, 1.0f, 5.0f, "%.1f");
-        SliderInput("Target radius", &s.gun_targeting_radius, 0.5f, 8.0f, 0.1f, 0.5f, "%.1f");
-        s.gun_targeting_distance = std::clamp(s.gun_targeting_distance, 10.0f, 120.0f);
-        s.gun_targeting_radius = std::clamp(s.gun_targeting_radius, 0.5f, 8.0f);
-        ImGui::Text("target uid: %04X  obj@: %08X  write %s",
-                    app.dbg_gun_target_uid, app.dbg_gun_target_obj,
-                    app.dbg_gun_target_write ? "yes" : "no");
-        ImGui::Text("ray: %.2f forward  %.2f off  candidates %d",
-                    app.dbg_gun_target_along, app.dbg_gun_target_perp,
-                    app.dbg_gun_target_candidates);
-    }
-
-    // ── Offset ──────────────────────────────
-    if (ImGui::CollapsingHeader("Offset Tuning")) {
-
-        ImGui::Text("Position");
-        SliderInput("X", &s.offset_x, -2, 2, 0.01f, 0.1f, "%.3f");
-        SliderInput("Y", &s.offset_y, -2, 2, 0.01f, 0.1f, "%.3f");
-        SliderInput("Z", &s.offset_z, -2, 2, 0.01f, 0.1f, "%.3f");
-
-        ImGui::Spacing();
-
-        ImGui::SeparatorText("Overall Gun Rotation Offset");
-        ImGui::TextWrapped("Use these three angles to rotate the entire gun orientation after controller tracking.");
-        SliderInput("Pitch Offset", &s.rot_offset_x, -180, 180, 0.5f, 5.0f, "%.2f");
-        SliderInput("Yaw Offset",   &s.rot_offset_y, -180, 180, 0.5f, 5.0f, "%.2f");
-        SliderInput("Roll Offset",  &s.rot_offset_z, -180, 180, 0.5f, 5.0f, "%.2f");
-        ImGui::Text("Current rot offset: %.2f  %.2f  %.2f",
-            s.rot_offset_x, s.rot_offset_y, s.rot_offset_z);
-
-        if (ImGui::Button("Reset offsets")) {
-            s.offset_x = kDefaultOffsetX;
-            s.offset_y = kDefaultOffsetY;
-            s.offset_z = kDefaultOffsetZ;
-            s.rot_offset_x = kDefaultRotOffsetX;
-            s.rot_offset_y = kDefaultRotOffsetY;
-            s.rot_offset_z = kDefaultRotOffsetZ;
-        }
-    }
-
-    // ── Scaling ───────────────────────────
-    if (ImGui::CollapsingHeader("Scaling")) {
-
-        SliderInput("World scale", &s.world_scale, 1, 50, 0.5f, 5.0f, "%.2f");
-
-        if (ImGui::Button("Reset scale")) {
-            s.world_scale = kDefaultWorldScale;
-        }
-
-        s.world_scale = std::clamp(s.world_scale, 1.0f, 50.0f);
-    }
-
-    // ── Debug ───────────────────────────────
-    if (ImGui::CollapsingHeader("Debug")) {
-        ImGui::Checkbox("Show matrix values", &s.show_matrix_debug);
-        ImGui::Checkbox("Show controller pose", &s.show_controller_debug);
-        if (s.show_controller_debug && app.last_pose.valid) {
-            ImGui::Text("Controller pos: %.3f %.3f %.3f",
-                app.last_pose.px, app.last_pose.py, app.last_pose.pz);
-            ImGui::Text("Controller rot: %.3f %.3f %.3f %.3f",
-                app.last_pose.qx, app.last_pose.qy,
-                app.last_pose.qz, app.last_pose.qw);
-            ImGui::Text("Trigger: %.2f", app.last_pose.trigger);
-        }
-
-        if (s.show_matrix_debug) {
-            auto& m = app.last_matrix;
-            ImGui::Text("Arm cannon matrix:");
-            ImGui::Text("  [%6.3f %6.3f %6.3f | %8.3f]",
-                m.at(0,0), m.at(0,1), m.at(0,2), m.at(0,3));
-            ImGui::Text("  [%6.3f %6.3f %6.3f | %8.3f]",
-                m.at(1,0), m.at(1,1), m.at(1,2), m.at(1,3));
-            ImGui::Text("  [%6.3f %6.3f %6.3f | %8.3f]",
-                m.at(2,0), m.at(2,1), m.at(2,2), m.at(2,3));
-        }
-
-        ImGui::Text("mem_base:  %llX", app.dbg_mem_base);
-        ImGui::Text("state_mgr: %08X", app.dbg_state_mgr);
-        ImGui::Text("player:    %08X", app.dbg_player);
-        ImGui::Text("pitch@:    %08X", app.dbg_pitch_addr);
-        ImGui::Text("cam_mgr:   %08X", app.dbg_cam_mgr);
-        ImGui::Text("gun_ptr:   %08X", app.dbg_gun_ptr);
-        ImGui::Text("gun_xf@:   %08X", app.dbg_gun_xf);
-        ImGui::Text("beam_xf@:  %08X", app.dbg_beam_xf);
-        ImGui::Text("world_xf@: %08X", app.dbg_world_xf);
-        ImGui::Text("local_xf@: %08X", app.dbg_local_xf);
-        ImGui::Text("player yaw: %.2f deg", app.dbg_player_yaw_deg);
-        ImGui::Text("yaw delta:  %.2f deg", app.dbg_player_yaw_delta_deg);
-        ImGui::Text("gun target: uid %04X obj %08X write %s score %.3f",
-            app.dbg_gun_target_uid, app.dbg_gun_target_obj,
-            app.dbg_gun_target_write ? "yes" : "no",
-            app.dbg_gun_target_score);
-
-        ImGui::SeparatorText("Timing");
-        ImGui::Text("tracker: poll %.2f ms  drops %d",
-            app.tracker_poll_ms, app.tracker_drop_count);
-        ImGui::Text("writer:  work %.2f ms  write %.2f ms  drops %d",
-            app.writer_work_ms, app.writer_write_ms, app.writer_drop_count);
-    }
-
-    ImGui::Separator();
-
-    if (ImGui::Button("Reset All Settings", {full_width, 30})) {
+    if (ImGui::Button("Reset All")) {
         s.reset_all();
+        app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
+        app.dolphin_performance_apply_requested.store(true, std::memory_order_relaxed);
+        app.shader_profile_apply_requested.store(true, std::memory_order_relaxed);
     }
-
-    if (ImGui::Button("Save Settings", {full_width, 30})) {
+    ImGui::SameLine();
+    if (ImGui::Button("Save Settings")) {
         s.save();
         ImGui::OpenPopup("Saved!");
     }
+    if (!compact)
+        ImGui::SameLine(std::max(320.0f, ImGui::GetContentRegionAvail().x - 145.0f));
+    ImGui::TextDisabled("By Nobbie  v%s", PRIMEDGUN_VERSION_STRING);
 
     if (ImGui::BeginPopup("Saved!")) {
         ImGui::Text("Settings saved to primedgun_settings.ini");
         ImGui::EndPopup();
     }
-
-    ImGui::Spacing();
-    const char* credit = "By Nobbie  v" PRIMEDGUN_VERSION_STRING;
-    const float credit_width = ImGui::CalcTextSize(credit).x;
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + full_width - credit_width);
-    ImGui::TextDisabled("%s", credit);
 
     ImGui::End();
 }

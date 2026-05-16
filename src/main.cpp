@@ -1,6 +1,7 @@
 #include <Windows.h>
 #include <mmsystem.h>
 #include <d3d11.h>
+#include <wincodec.h>
 #include <chrono>
 #include <thread>
 #include <cmath>
@@ -13,6 +14,7 @@
 #include <string_view>
 #include <vector>
 #include <cstring>
+#include <cstdint>
 #include <cstdlib>
 #include <sstream>
 #include <tlhelp32.h>
@@ -38,6 +40,9 @@ static ID3D11DeviceContext*    g_context = nullptr;
 static IDXGISwapChain*         g_swapchain = nullptr;
 static ID3D11RenderTargetView* g_rtv = nullptr;
 static HWND                    g_hwnd = nullptr;
+static ID3D11ShaderResourceView* g_controller_layout_srv = nullptr;
+static int g_controller_layout_width = 0;
+static int g_controller_layout_height = 0;
 
 static Settings       g_settings;
 static AppState       g_app;
@@ -155,6 +160,22 @@ static std::wstring widen_ascii(std::string_view value) {
     return std::wstring(value.begin(), value.end());
 }
 
+static void cleanup_render_target() {
+    if (g_rtv) {
+        g_rtv->Release();
+        g_rtv = nullptr;
+    }
+}
+
+static void create_render_target() {
+    ID3D11Texture2D* back = nullptr;
+    if (!g_swapchain || FAILED(g_swapchain->GetBuffer(0, IID_PPV_ARGS(&back))) || !back)
+        return;
+
+    g_device->CreateRenderTargetView(back, nullptr, &g_rtv);
+    back->Release();
+}
+
 static std::string trim_ascii(std::string value) {
     const auto first = value.find_first_not_of(" \t\r\n");
     if (first == std::string::npos)
@@ -234,6 +255,112 @@ static fs::path exe_directory() {
     wchar_t buffer[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, buffer, static_cast<DWORD>(MAX_PATH));
     return fs::path(buffer).parent_path();
+}
+
+static void release_controller_layout_texture() {
+    if (g_controller_layout_srv) {
+        g_controller_layout_srv->Release();
+        g_controller_layout_srv = nullptr;
+    }
+    g_controller_layout_width = 0;
+    g_controller_layout_height = 0;
+    g_app.controller_layout_texture = ImTextureID_Invalid;
+    g_app.controller_layout_width = 0;
+    g_app.controller_layout_height = 0;
+}
+
+static bool load_controller_layout_texture() {
+    release_controller_layout_texture();
+    if (!g_device)
+        return false;
+
+    const fs::path image_path = exe_directory() / L"assets" / L"controller layout.png";
+
+    IWICImagingFactory* factory = nullptr;
+    IWICBitmapDecoder* decoder = nullptr;
+    IWICBitmapFrameDecode* frame = nullptr;
+    IWICFormatConverter* converter = nullptr;
+    ID3D11Texture2D* texture = nullptr;
+
+    bool ok = false;
+    UINT width = 0;
+    UINT height = 0;
+    std::vector<unsigned char> pixels;
+
+    HRESULT hr = CoCreateInstance(
+        CLSID_WICImagingFactory,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&factory));
+    if (SUCCEEDED(hr)) {
+        hr = factory->CreateDecoderFromFilename(
+            image_path.c_str(),
+            nullptr,
+            GENERIC_READ,
+            WICDecodeMetadataCacheOnLoad,
+            &decoder);
+    }
+    if (SUCCEEDED(hr))
+        hr = decoder->GetFrame(0, &frame);
+    if (SUCCEEDED(hr))
+        hr = frame->GetSize(&width, &height);
+    if (SUCCEEDED(hr))
+        hr = factory->CreateFormatConverter(&converter);
+    if (SUCCEEDED(hr)) {
+        hr = converter->Initialize(
+            frame,
+            GUID_WICPixelFormat32bppRGBA,
+            WICBitmapDitherTypeNone,
+            nullptr,
+            0.0,
+            WICBitmapPaletteTypeCustom);
+    }
+    if (SUCCEEDED(hr) && width > 0 && height > 0) {
+        const UINT stride = width * 4;
+        pixels.resize(static_cast<size_t>(stride) * height);
+        hr = converter->CopyPixels(nullptr, stride, static_cast<UINT>(pixels.size()), pixels.data());
+    }
+    if (SUCCEEDED(hr)) {
+        D3D11_TEXTURE2D_DESC desc = {};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA data = {};
+        data.pSysMem = pixels.data();
+        data.SysMemPitch = width * 4;
+
+        hr = g_device->CreateTexture2D(&desc, &data, &texture);
+    }
+    if (SUCCEEDED(hr)) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+        srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srv_desc.Texture2D.MipLevels = 1;
+        hr = g_device->CreateShaderResourceView(texture, &srv_desc, &g_controller_layout_srv);
+    }
+    if (SUCCEEDED(hr) && g_controller_layout_srv) {
+        g_controller_layout_width = static_cast<int>(width);
+        g_controller_layout_height = static_cast<int>(height);
+        g_app.controller_layout_texture =
+            static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(g_controller_layout_srv));
+        g_app.controller_layout_width = g_controller_layout_width;
+        g_app.controller_layout_height = g_controller_layout_height;
+        ok = true;
+    }
+
+    if (texture) texture->Release();
+    if (converter) converter->Release();
+    if (frame) frame->Release();
+    if (decoder) decoder->Release();
+    if (factory) factory->Release();
+
+    return ok;
 }
 
 static fs::path user_profile_path() {
@@ -1352,6 +1479,20 @@ static void apply_primedgun_vr_shader_profile_in(const fs::path& path) {
     write_text_lines_if_changed(path, lines);
 }
 
+static void remove_primedgun_vr_shader_profile_in(const fs::path& path) {
+    if (path.empty())
+        return;
+
+    std::vector<std::string> lines = remove_ini_sections(
+        read_text_lines(path),
+        {"ShaderOverride_Enable", "ShaderOverride",
+         "ElementsGroupOverride_Enable", "ElementsGroupOverride"});
+
+    while (!lines.empty() && lines.back().empty())
+        lines.pop_back();
+    write_text_lines_if_changed(path, lines);
+}
+
 
 static void apply_primedgun_vr_shader_profile() {
     if (fs::exists(exe_directory() / L"primedgun_shader_capture_mode.txt")) {
@@ -1360,6 +1501,12 @@ static void apply_primedgun_vr_shader_profile() {
     }
 
     for (const fs::path& path : dolphin_gm8e01_vr_settings_paths()) {
+        if (!g_settings.shader_overrides_enabled) {
+            remove_primedgun_vr_shader_profile_in(path);
+            app_hook_log(L"Removed PrimedGun GM8E01 VR shader profile from " + path.wstring());
+            continue;
+        }
+
         apply_primedgun_vr_shader_profile_in(path);
         std::wstring suffix;
         const std::string mode = primedgun_shader_test_mode();
@@ -1884,7 +2031,7 @@ static bool vr_settings_pointer_hit(const Pose& left, const Pose& right, float& 
     return x_out >= 0.0f && x_out <= 1.0f && y_out >= 0.0f && y_out <= 1.0f;
 }
 
-static constexpr uint32_t k_vr_settings_item_count = 31;
+static constexpr uint32_t k_vr_settings_item_count = 32;
 
 static std::chrono::steady_clock::time_point g_vr_settings_saved_notice_until{};
 
@@ -1896,7 +2043,10 @@ static void change_vr_setting(uint32_t index, bool increase) {
         g_vr_settings_saved_notice_until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         app_hook_log(L"VR settings saved from in-headset menu.");
         return;
-    case 1: g_settings.reset_all(); break;
+    case 1:
+        g_settings.reset_all();
+        g_app.shader_profile_apply_requested.store(true, std::memory_order_relaxed);
+        break;
     case 2: g_settings.use_right_hand = !g_settings.use_right_hand; break;
     case 3: g_settings.require_trigger = !g_settings.require_trigger; break;
     case 4: g_settings.trigger_threshold = std::clamp(g_settings.trigger_threshold + sign * 0.05f, 0.0f, 1.0f); break;
@@ -1926,24 +2076,28 @@ static void change_vr_setting(uint32_t index, bool increase) {
         g_settings.gun_targeting_radius = kDefaultGunTargetingRadius;
         break;
     case 18: g_settings.auto_dolphin_xr_controls = !g_settings.auto_dolphin_xr_controls; break;
-    case 19: g_settings.xr_dpad_enabled = !g_settings.xr_dpad_enabled; break;
-    case 20: g_settings.xr_dpad_head_radius = std::clamp(g_settings.xr_dpad_head_radius + sign * 0.01f, 0.08f, 0.28f); break;
-    case 21: g_settings.xr_dpad_head_y_below = std::clamp(g_settings.xr_dpad_head_y_below + sign * 0.01f, 0.02f, 0.25f); break;
-    case 22: g_settings.xr_dpad_deadzone = std::clamp(g_settings.xr_dpad_deadzone + sign * 0.01f, 0.20f, 0.80f); break;
-    case 23:
+    case 19:
+        g_settings.shader_overrides_enabled = !g_settings.shader_overrides_enabled;
+        g_app.shader_profile_apply_requested.store(true, std::memory_order_relaxed);
+        break;
+    case 20: g_settings.xr_dpad_enabled = !g_settings.xr_dpad_enabled; break;
+    case 21: g_settings.xr_dpad_head_radius = std::clamp(g_settings.xr_dpad_head_radius + sign * 0.01f, 0.08f, 0.28f); break;
+    case 22: g_settings.xr_dpad_head_y_below = std::clamp(g_settings.xr_dpad_head_y_below + sign * 0.01f, 0.02f, 0.25f); break;
+    case 23: g_settings.xr_dpad_deadzone = std::clamp(g_settings.xr_dpad_deadzone + sign * 0.01f, 0.20f, 0.80f); break;
+    case 24:
         g_settings.xr_dpad_enabled = kDefaultXrDpadEnabled;
         g_settings.xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
         g_settings.xr_dpad_head_y_below = kDefaultXrDpadHeadYBelow;
         g_settings.xr_dpad_deadzone = kDefaultXrDpadDeadzone;
         g_settings.xr_dpad_stick_axis = kDefaultXrDpadStickAxis;
         break;
-    case 24: g_settings.directional_movement_enabled = !g_settings.directional_movement_enabled; break;
-    case 25: g_settings.directional_movement_use_right_stick = !g_settings.directional_movement_use_right_stick; break;
-    case 26: g_settings.directional_movement_deadzone = std::clamp(g_settings.directional_movement_deadzone + sign * 0.01f, 0.05f, 0.80f); break;
-    case 27: g_settings.directional_movement_speed = std::clamp(g_settings.directional_movement_speed + sign * 0.25f, 4.0f, 30.0f); break;
-    case 28: g_settings.directional_movement_accel = std::clamp(g_settings.directional_movement_accel + sign * 1.0f, 5.0f, 120.0f); break;
-    case 29: g_settings.directional_movement_air_accel = std::clamp(g_settings.directional_movement_air_accel + sign * 0.5f, 0.0f, 60.0f); break;
-    case 30:
+    case 25: g_settings.directional_movement_enabled = !g_settings.directional_movement_enabled; break;
+    case 26: g_settings.directional_movement_use_right_stick = !g_settings.directional_movement_use_right_stick; break;
+    case 27: g_settings.directional_movement_deadzone = std::clamp(g_settings.directional_movement_deadzone + sign * 0.01f, 0.05f, 0.80f); break;
+    case 28: g_settings.directional_movement_speed = std::clamp(g_settings.directional_movement_speed + sign * 0.25f, 4.0f, 30.0f); break;
+    case 29: g_settings.directional_movement_accel = std::clamp(g_settings.directional_movement_accel + sign * 1.0f, 5.0f, 120.0f); break;
+    case 30: g_settings.directional_movement_air_accel = std::clamp(g_settings.directional_movement_air_accel + sign * 0.5f, 0.0f, 60.0f); break;
+    case 31:
         g_settings.directional_movement_enabled = kDefaultDirectionalMovementEnabled;
         g_settings.directional_movement_use_right_stick = kDefaultDirectionalMovementUseRightStick;
         g_settings.directional_movement_deadzone = kDefaultDirectionalMovementDeadzone;
@@ -1982,6 +2136,7 @@ static void sync_vr_settings_to_shared(uint32_t generation, bool visible, uint32
     s.gunTargetingDistance = g_settings.gun_targeting_distance;
     s.gunTargetingRadius = g_settings.gun_targeting_radius;
     s.autoDolphinXrControls = g_settings.auto_dolphin_xr_controls ? 1u : 0u;
+    s.shaderOverridesEnabled = g_settings.shader_overrides_enabled ? 1u : 0u;
     s.xrDpadEnabled = g_settings.xr_dpad_enabled ? 1u : 0u;
     s.xrDpadHeadRadius = g_settings.xr_dpad_head_radius;
     s.xrDpadHeadYBelow = g_settings.xr_dpad_head_y_below;
@@ -4254,6 +4409,17 @@ static void writer_thread() {
 
 static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
+    if (msg == WM_SIZE && g_device && g_swapchain && wParam != SIZE_MINIMIZED) {
+        cleanup_render_target();
+        g_swapchain->ResizeBuffers(
+            0,
+            static_cast<UINT>(LOWORD(lParam)),
+            static_cast<UINT>(HIWORD(lParam)),
+            DXGI_FORMAT_UNKNOWN,
+            0);
+        create_render_target();
+        return 0;
+    }
     if (msg == WM_CLOSE) {
         restore_dolphin_borrowed_controls();
     }
@@ -4268,8 +4434,8 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 static bool init_d3d(HWND hwnd) {
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 2;
-    sd.BufferDesc.Width = 500;
-    sd.BufferDesc.Height = 650;
+    sd.BufferDesc.Width = 0;
+    sd.BufferDesc.Height = 0;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.BufferDesc.RefreshRate = {60, 1};
     sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
@@ -4286,10 +4452,7 @@ static bool init_d3d(HWND hwnd) {
         return false;
     }
 
-    ID3D11Texture2D* back = nullptr;
-    g_swapchain->GetBuffer(0, IID_PPV_ARGS(&back));
-    g_device->CreateRenderTargetView(back, nullptr, &g_rtv);
-    back->Release();
+    create_render_target();
     return true;
 }
 
@@ -4325,10 +4488,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     };
     RegisterClassExW(&wc);
 
+    const DWORD window_style = WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX;
+    RECT window_rect{0, 0, 700, 720};
+    AdjustWindowRect(&window_rect, window_style, FALSE);
+
     g_hwnd = CreateWindowW(
         L"PrimedGun", L"PrimedGun",
-        WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
-        100, 100, 516, 688, nullptr, nullptr, hInstance, nullptr);
+        window_style,
+        100, 100,
+        window_rect.right - window_rect.left,
+        window_rect.bottom - window_rect.top,
+        nullptr, nullptr, hInstance, nullptr);
 
     SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(app_icon));
     SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(app_icon_small));
@@ -4338,6 +4508,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         restore_dolphin_borrowed_controls();
         return 1;
     }
+    const HRESULT com_init_hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool com_initialized = SUCCEEDED(com_init_hr);
+    load_controller_layout_texture();
 
     ShowWindow(g_hwnd, SW_SHOWDEFAULT);
     UpdateWindow(g_hwnd);
@@ -4349,9 +4522,33 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     ImGui_ImplDX11_Init(g_device, g_context);
 
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 4.0f;
-    style.FrameRounding = 3.0f;
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.1f, 0.1f, 0.12f, 1.0f);
+    style.WindowRounding = 6.0f;
+    style.ChildRounding = 6.0f;
+    style.FrameRounding = 4.0f;
+    style.GrabRounding = 4.0f;
+    style.TabRounding = 5.0f;
+    style.WindowPadding = ImVec2(14.0f, 12.0f);
+    style.FramePadding = ImVec2(9.0f, 5.0f);
+    style.ItemSpacing = ImVec2(9.0f, 7.0f);
+    style.ScrollbarSize = 13.0f;
+    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.055f, 0.060f, 0.070f, 1.0f);
+    style.Colors[ImGuiCol_ChildBg] = ImVec4(0.075f, 0.082f, 0.095f, 1.0f);
+    style.Colors[ImGuiCol_Border] = ImVec4(0.25f, 0.28f, 0.31f, 0.65f);
+    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.13f, 0.15f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.17f, 0.19f, 0.22f, 1.0f);
+    style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.20f, 0.23f, 0.27f, 1.0f);
+    style.Colors[ImGuiCol_Header] = ImVec4(0.18f, 0.22f, 0.26f, 1.0f);
+    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.24f, 0.31f, 0.36f, 1.0f);
+    style.Colors[ImGuiCol_HeaderActive] = ImVec4(0.27f, 0.35f, 0.40f, 1.0f);
+    style.Colors[ImGuiCol_Button] = ImVec4(0.16f, 0.19f, 0.22f, 1.0f);
+    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.24f, 0.31f, 0.36f, 1.0f);
+    style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.30f, 0.40f, 0.46f, 1.0f);
+    style.Colors[ImGuiCol_Tab] = ImVec4(0.11f, 0.13f, 0.15f, 1.0f);
+    style.Colors[ImGuiCol_TabHovered] = ImVec4(0.24f, 0.31f, 0.36f, 1.0f);
+    style.Colors[ImGuiCol_TabSelected] = ImVec4(0.18f, 0.23f, 0.27f, 1.0f);
+    style.Colors[ImGuiCol_SliderGrab] = ImVec4(0.76f, 0.50f, 0.18f, 1.0f);
+    style.Colors[ImGuiCol_SliderGrabActive] = ImVec4(0.95f, 0.64f, 0.22f, 1.0f);
+    style.Colors[ImGuiCol_CheckMark] = ImVec4(0.95f, 0.64f, 0.22f, 1.0f);
 
     g_app.dolphin_ok = g_dolphin.connect();
     g_app.dolphin_status = g_dolphin.status();
@@ -4396,6 +4593,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
         }
         if (g_app.shader_profile_apply_requested.exchange(false, std::memory_order_relaxed)) {
             apply_primedgun_vr_shader_profile();
+            g_settings.save();
         }
 
         static auto last_dolphin_auto_connect = std::chrono::steady_clock::time_point{};
@@ -4701,7 +4899,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             last_patch_watchdog = now;
         }
 
-        if (!g_app.active && g_app.dolphin_ok && g_app.game_rev0_ok &&
+        if (!g_app.manually_paused.load(std::memory_order_relaxed) &&
+            !g_app.active && g_app.dolphin_ok && g_app.game_rev0_ok &&
             g_app.tracking_ok && app_patches_are_applied()) {
             g_app.active = true;
             g_app.recenter_requested.store(true, std::memory_order_relaxed);
@@ -4733,10 +4932,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
 
+    release_controller_layout_texture();
     if (g_rtv) g_rtv->Release();
     if (g_swapchain) g_swapchain->Release();
     if (g_context) g_context->Release();
     if (g_device) g_device->Release();
+    if (com_initialized) CoUninitialize();
 
     DestroyWindow(g_hwnd);
     UnregisterClassW(L"PrimedGun", hInstance);

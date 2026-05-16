@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
-project(PrimedGun VERSION 0.9.4)
+project(PrimedGun VERSION 0.9.5)
 
-set(PRIMEDGUN_VERSION_STRING "0.9.4b")
+set(PRIMEDGUN_VERSION_STRING "0.9.5")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -70,6 +70,7 @@ target_link_libraries(PrimedGun
     dwmapi
     psapi
     winmm
+    windowscodecs
 )
 
 # Dolphin hook sidecar. PrimedGun.exe starts/finds Dolphin, then injects this DLL.
