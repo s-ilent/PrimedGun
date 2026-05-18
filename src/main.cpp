@@ -1014,6 +1014,20 @@ static void apply_dolphin_60fps_cap() {
     app_hook_log(L"Applied Dolphin 60 FPS cap: normal speed with CPU and VI overclock disabled.");
 }
 
+static void apply_dolphin_required_runtime_config() {
+    const fs::path path = dolphin_ini_path();
+    if (path.empty())
+        return;
+
+    backup_file_once(path);
+    apply_ini_section_values(path, "Core",
+                             {{"CPUThread", "True"},
+                              {"MMU", "True"}},
+                             {});
+    apply_ini_section_values(path, "Input", {{"BackgroundInput", "True"}}, {});
+    app_hook_log(L"Applied Dolphin required runtime config: dual core, MMU, background input.");
+}
+
 static void apply_dolphin_xr_camera_forward_zero() {
     const fs::path path = dolphin_gfx_ini_path();
     if (path.empty())
@@ -4596,6 +4610,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     g_settings.load();
     open_app_hook_log();
     apply_dolphin_vr_units_per_meter();
+    apply_dolphin_required_runtime_config();
     apply_dolphin_60fps_cap();
     apply_primedgun_vr_shader_profile();
     apply_dolphin_xr_camera_forward_zero();
@@ -4709,6 +4724,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             g_app.dolphin_ok = false;
             g_dolphin.disconnect();
             apply_dolphin_vr_units_per_meter();
+            apply_dolphin_required_runtime_config();
             apply_dolphin_60fps_cap();
             apply_primedgun_vr_shader_profile();
             disable_unmanaged_dolphin_codes();
@@ -4744,6 +4760,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
             const std::optional<DWORD> dolphin_pid = find_process_id_by_name(L"Dolphin.exe");
             if (dolphin_pid && *dolphin_pid != last_auto_hook_pid) {
                 apply_dolphin_vr_units_per_meter();
+                apply_dolphin_required_runtime_config();
                 apply_dolphin_60fps_cap();
                 apply_primedgun_vr_shader_profile();
                 disable_unmanaged_dolphin_codes();
