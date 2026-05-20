@@ -78,6 +78,7 @@ struct AppState {
     std::atomic<bool> reconnect_tracking_requested = false;
     std::atomic<bool> remap_dolphin_controls_requested = false;
     std::atomic<bool> dolphin_performance_apply_requested = false;
+    std::atomic<bool> app_patches_apply_requested = false;
     ImTextureID controller_layout_texture = ImTextureID_Invalid;
     int controller_layout_width = 0;
     int controller_layout_height = 0;
@@ -236,6 +237,12 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
 
         if (ImGui::BeginTabItem("Dolphin Settings")) {
             begin_panel("##dolphin_panel", "Dolphin Profile");
+            const bool old_dolphin_recommended_settings = s.dolphin_recommended_settings;
+            ImGui::Checkbox("Recommended Settings", &s.dolphin_recommended_settings);
+            if (s.dolphin_recommended_settings != old_dolphin_recommended_settings) {
+                app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
+            }
+
             const bool old_dolphin_60fps_cap = s.dolphin_60fps_cap;
             ImGui::Checkbox("Limit Dolphin to 60 FPS", &s.dolphin_60fps_cap);
             if (s.dolphin_60fps_cap != old_dolphin_60fps_cap) {
@@ -253,6 +260,7 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
             if (ImGui::Button("Reset Controller")) {
                 s.use_right_hand = kDefaultUseRightHand;
                 s.auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
+                s.dolphin_recommended_settings = kDefaultDolphinRecommendedSettings;
                 s.dolphin_60fps_cap = kDefaultDolphin60FpsCap;
                 s.xr_dpad_enabled = kDefaultXrDpadEnabled;
                 s.xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
@@ -373,6 +381,36 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
             ImGui::EndTabItem();
         }
 
+        if (ImGui::BeginTabItem("AR Codes")) {
+            begin_panel("##ar_codes_panel", "App-Owned AR Codes");
+            if (ImGui::Button("Enable All")) {
+                for (Settings::ArCodeToggle& toggle : s.ar_code_toggles)
+                    toggle.enabled = true;
+                app.app_patches_apply_requested.store(true, std::memory_order_relaxed);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Disable All")) {
+                for (Settings::ArCodeToggle& toggle : s.ar_code_toggles)
+                    toggle.enabled = false;
+                app.app_patches_apply_requested.store(true, std::memory_order_relaxed);
+            }
+            ImGui::Spacing();
+
+            if (s.ar_code_toggles.empty()) {
+                ImGui::TextDisabled("No app-owned AR codes loaded.");
+            } else {
+                for (size_t i = 0; i < s.ar_code_toggles.size(); ++i) {
+                    Settings::ArCodeToggle& toggle = s.ar_code_toggles[i];
+                    ImGui::PushID(static_cast<int>(i));
+                    if (ImGui::Checkbox(toggle.name.c_str(), &toggle.enabled))
+                        app.app_patches_apply_requested.store(true, std::memory_order_relaxed);
+                    ImGui::PopID();
+                }
+            }
+            end_panel();
+            ImGui::EndTabItem();
+        }
+
         if (ImGui::BeginTabItem("Layout")) {
             begin_panel("##controller_map_panel", "Controller Layout");
             if (app.controller_layout_texture != ImTextureID_Invalid &&
@@ -466,6 +504,7 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
         s.reset_all();
         app.remap_dolphin_controls_requested.store(true, std::memory_order_relaxed);
         app.dolphin_performance_apply_requested.store(true, std::memory_order_relaxed);
+        app.app_patches_apply_requested.store(true, std::memory_order_relaxed);
     }
     ImGui::SameLine();
     if (ImGui::Button("Save Settings")) {

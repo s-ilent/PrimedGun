@@ -2,6 +2,7 @@
 #include <string>
 #include <fstream>
 #include <algorithm>
+#include <vector>
 
 inline constexpr bool kDefaultUseRightHand = true;
 inline constexpr float kDefaultOffsetX = 0.0f;
@@ -16,6 +17,7 @@ inline constexpr float kDefaultGunTargetingDistance = 60.0f;
 inline constexpr float kDefaultGunTargetingRadius = 2.5f;
 inline constexpr bool kDefaultXrDpadEnabled = true;
 inline constexpr bool kDefaultAutoDolphinXrControls = true;
+inline constexpr bool kDefaultDolphinRecommendedSettings = true;
 inline constexpr bool kDefaultDolphin60FpsCap = false;
 inline constexpr float kDefaultXrDpadHeadRadius = 0.18f;
 inline constexpr float kDefaultXrDpadHeadYBelow = 0.14f;
@@ -70,6 +72,11 @@ inline GameAddresses get_addresses() {
 }
 
 struct Settings {
+    struct ArCodeToggle {
+        std::string name;
+        bool enabled = true;
+    };
+
     bool use_right_hand = kDefaultUseRightHand;
     float offset_x = kDefaultOffsetX;
     float offset_y = kDefaultOffsetY;
@@ -87,6 +94,7 @@ struct Settings {
     float gun_targeting_distance = kDefaultGunTargetingDistance;
     float gun_targeting_radius = kDefaultGunTargetingRadius;
     bool auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
+    bool dolphin_recommended_settings = kDefaultDolphinRecommendedSettings;
     bool dolphin_60fps_cap = kDefaultDolphin60FpsCap;
     bool xr_dpad_enabled = kDefaultXrDpadEnabled;
     float xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
@@ -100,8 +108,19 @@ struct Settings {
     float directional_movement_accel = kDefaultDirectionalMovementAccel;
     float directional_movement_air_accel = kDefaultDirectionalMovementAirAccel;
     float view_height_meters = kDefaultViewHeightMeters;
+    std::vector<ArCodeToggle> ar_code_toggles;
 
     static const char* filename() { return "primedgun_settings.ini"; }
+
+    static std::string normalized_ar_code_name(const std::string& name) {
+        if (name == "Relax Frustum Side Culling For 360 View")
+            return "Disable Frustum Culling";
+        if (name == "Restore VR rotation after 80040FE8 Hook")
+            return "Cannon Rotation Hook";
+        if (name == "Visor Patch")
+            return "Disable Visor Effects";
+        return name;
+    }
 
     void reset_all() {
         use_right_hand = kDefaultUseRightHand;
@@ -121,6 +140,7 @@ struct Settings {
         gun_targeting_distance = kDefaultGunTargetingDistance;
         gun_targeting_radius = kDefaultGunTargetingRadius;
         auto_dolphin_xr_controls = kDefaultAutoDolphinXrControls;
+        dolphin_recommended_settings = kDefaultDolphinRecommendedSettings;
         dolphin_60fps_cap = kDefaultDolphin60FpsCap;
         xr_dpad_enabled = kDefaultXrDpadEnabled;
         xr_dpad_head_radius = kDefaultXrDpadHeadRadius;
@@ -134,6 +154,27 @@ struct Settings {
         directional_movement_accel = kDefaultDirectionalMovementAccel;
         directional_movement_air_accel = kDefaultDirectionalMovementAirAccel;
         view_height_meters = kDefaultViewHeightMeters;
+        for (ArCodeToggle& toggle : ar_code_toggles)
+            toggle.enabled = true;
+    }
+
+    bool ensure_ar_code_toggle(const std::string& name) {
+        const std::string normalized = normalized_ar_code_name(name);
+        if (normalized.empty())
+            return false;
+        const auto found = std::find_if(ar_code_toggles.begin(), ar_code_toggles.end(),
+            [&](const ArCodeToggle& toggle) { return toggle.name == normalized; });
+        if (found != ar_code_toggles.end())
+            return false;
+        ar_code_toggles.push_back({normalized, true});
+        return true;
+    }
+
+    bool ar_code_enabled(const std::string& name) const {
+        const std::string normalized = normalized_ar_code_name(name);
+        const auto found = std::find_if(ar_code_toggles.begin(), ar_code_toggles.end(),
+            [&](const ArCodeToggle& toggle) { return toggle.name == normalized; });
+        return found == ar_code_toggles.end() || found->enabled;
     }
 
     void save() const {
@@ -156,6 +197,7 @@ struct Settings {
         f << "gun_targeting_distance=" << gun_targeting_distance << "\n";
         f << "gun_targeting_radius=" << gun_targeting_radius << "\n";
         f << "auto_dolphin_xr_controls=" << auto_dolphin_xr_controls << "\n";
+        f << "dolphin_recommended_settings=" << dolphin_recommended_settings << "\n";
         f << "dolphin_60fps_cap=" << dolphin_60fps_cap << "\n";
         f << "xr_dpad_enabled=" << xr_dpad_enabled << "\n";
         f << "xr_dpad_head_radius=" << xr_dpad_head_radius << "\n";
@@ -169,6 +211,8 @@ struct Settings {
         f << "directional_movement_accel=" << directional_movement_accel << "\n";
         f << "directional_movement_air_accel=" << directional_movement_air_accel << "\n";
         f << "view_height_meters=" << view_height_meters << "\n";
+        for (const ArCodeToggle& toggle : ar_code_toggles)
+            f << "ar_code." << toggle.name << "=" << toggle.enabled << "\n";
     }
 
     void load() {
@@ -197,6 +241,7 @@ struct Settings {
             else if (key == "gun_targeting_distance") gun_targeting_distance = std::stof(val);
             else if (key == "gun_targeting_radius") gun_targeting_radius = std::stof(val);
             else if (key == "auto_dolphin_xr_controls") auto_dolphin_xr_controls = std::stoi(val);
+            else if (key == "dolphin_recommended_settings") dolphin_recommended_settings = std::stoi(val);
             else if (key == "dolphin_60fps_cap") dolphin_60fps_cap = std::stoi(val);
             else if (key == "xr_dpad_enabled")       xr_dpad_enabled = std::stoi(val);
             else if (key == "xr_dpad_head_radius")   xr_dpad_head_radius = std::stof(val);
@@ -210,6 +255,16 @@ struct Settings {
             else if (key == "directional_movement_accel") directional_movement_accel = std::stof(val);
             else if (key == "directional_movement_air_accel") directional_movement_air_accel = std::stof(val);
             else if (key == "view_height_meters") view_height_meters = std::stof(val);
+            else if (key.rfind("ar_code.", 0) == 0) {
+                const std::string name = normalized_ar_code_name(key.substr(8));
+                ensure_ar_code_toggle(name);
+                for (ArCodeToggle& toggle : ar_code_toggles) {
+                    if (toggle.name == name) {
+                        toggle.enabled = std::stoi(val) != 0;
+                        break;
+                    }
+                }
+            }
         }
         xr_dpad_head_radius = std::clamp(xr_dpad_head_radius, 0.08f, 0.28f);
         xr_dpad_head_y_below = std::clamp(xr_dpad_head_y_below, 0.02f, 0.25f);

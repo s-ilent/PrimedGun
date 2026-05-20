@@ -43,10 +43,14 @@ constexpr uint32_t kFirstPersonCameraEnd = 0x8000FA80u;
 constexpr uint32_t kPpcNop = 0x60000000u;
 constexpr uint32_t kStateManager = 0x8045A1A8u;
 constexpr uint32_t kPlayerOffset = 0x84Cu;
+constexpr uint32_t kObjectListOffset = 0x810u;
+constexpr uint32_t kCameraManagerOffset = 0x86Cu;
+constexpr uint32_t kTransformOffset = 0x34u;
 constexpr uint32_t kGunTargetHookScratch = 0x817FE400u;
 constexpr uint32_t kFinalInputOffset = 0xB54u;
 constexpr uint32_t kOrbitStateOffset = 0x304u;
 constexpr uint32_t kFirstPersonPitchOffset = 0x3ECu;
+constexpr uint32_t kFirstPersonPitchVelOffset = 0x3F0u;
 constexpr uint32_t kOrbitStateGrapple = 5u;
 
 std::atomic<bool> g_installed = false;
@@ -56,11 +60,24 @@ uint64_t g_renderSuppressChecks = 0;
 uint64_t g_notLockedLogs = 0;
 uint64_t g_lastResolveTick = 0;
 uint64_t g_lockLatchUntilTick = 0;
+bool g_traceLastLockHeld = false;
+bool g_traceHavePitch = false;
+uint32_t g_traceFramesRemaining = 0;
+uint32_t g_traceSequence = 0;
+uint64_t g_traceStartTick = 0;
+uint64_t g_traceLastLogTick = 0;
+float g_traceLastPitch = 0.0f;
+float g_traceLastCameraFwdZ = 0.0f;
+uint32_t g_traceLastOrbitState = 0xffffffffu;
+uint32_t g_traceLastScanState = 0xffffffffu;
+bool g_traceLastButtonLock = false;
+bool g_traceHaveCamera = false;
 bool g_dumpedPlayerOrbitCode = false;
 bool g_dumpedFirstPersonCameraCode = false;
 uint32_t g_lastOrbitState = 0xffffffffu;
 uint32_t g_lastPatchGeneration = 0;
 uint32_t g_lastPatchCount = 0;
+std::unordered_map<uint32_t, uint32_t> g_appPatchOriginals;
 uint32_t g_lastInputBindingRequestGeneration = 0;
 bool g_dumpedDolphinConfigProbe = false;
 uint64_t g_lastDolphinConfigFileProbeTick = 0;
@@ -119,19 +136,64 @@ std::vector<ProbeFileState> g_probeFileStates;
 struct PpcPatch {
     uint32_t address;
     uint32_t original;
+    uint32_t replacement;
     const wchar_t* description;
     bool applied;
     bool loggedWaiting;
 };
 
 PpcPatch g_orbitPatches[] = {
-    // Replace target.y - camera.y with zero in CFirstPersonCamera::UpdateTransform.
-    {0x8000E7B0u, 0xEC42F028u, L"CFirstPersonCamera target vertical delta branch A", false, false},
-    {0x8000E804u, 0xEC42F028u, L"CFirstPersonCamera target vertical delta branch B", false, false},
-    {0x8000E838u, 0xEC42F028u, L"CFirstPersonCamera target vertical delta branch C", false, false},
+    // The first target-lock frame can still run through the p304=0 transition
+    // branch before steady orbit state 2/3. Use each branch-local flattened
+    // target vector so combat lock never pitches toward target height. Scan
+    // lock uses the p304=1/4 branch and keeps pitch.
+    {0x8000EBECu, 0x3881044Cu, 0x388103FCu,
+     L"CFirstPersonCamera pre-orbit flattened target vector", false, false},
+    {0x8000EFF4u, 0x3881044Cu, 0x38810394u,
+     L"CFirstPersonCamera normal lock-on flattened target vector", false, false},
+    {0x8000F5C0u, 0x3881044Cu, 0x38810320u,
+     L"CFirstPersonCamera early follow flattened target vector", false, false},
 };
 
+struct DynamicPpcPatch {
+    uint32_t address;
+    uint32_t original;
+    uint32_t replacement;
+    const wchar_t* description;
+};
+
+constexpr uint32_t kLoadZeroToF1 = 0xC02280B0u; // lfs f1, -0x7f50(r2)
 constexpr uint32_t kLoadZeroToF2 = 0xC04280B0u; // lfs f2, -0x7f50(r2)
+
+DynamicPpcPatch g_combatPitchPatches[] = {
+    {0x8000E7B4u, 0xEC21E828u, kLoadZeroToF1,
+     L"CFirstPersonCamera scan/lock target Z delta A"},
+    {0x8000E808u, 0xEC21E828u, kLoadZeroToF1,
+     L"CFirstPersonCamera scan/lock target Z delta B"},
+    {0x8000E83Cu, 0xEC21E828u, kLoadZeroToF1,
+     L"CFirstPersonCamera scan/lock target Z delta C"},
+    {0x8000F050u, 0xC05F01B4u, kLoadZeroToF2,
+     L"CFirstPersonCamera combat orbit transition current camera Z"},
+    {0x8000EB44u, 0xC041086Cu, kLoadZeroToF2,
+     L"CFirstPersonCamera pre-orbit current camera Z"},
+    {0x8000EF44u, 0xC041086Cu, kLoadZeroToF2,
+     L"CFirstPersonCamera normal orbit current camera Z"},
+    {0x8000F50Cu, 0xC041086Cu, kLoadZeroToF2,
+     L"CFirstPersonCamera early follow current camera Z"},
+};
+
+DynamicPpcPatch g_scanOrbitCameraPatches[] = {
+    {0x8000EA24u, 0x4182062Cu, 0x41820024u,
+     L"CFirstPersonCamera scan state 4 uses normal pitch branch"},
+    {0x8000EA30u, 0x41820620u, 0x41820018u,
+     L"CFirstPersonCamera scan state 1 uses normal pitch branch"},
+};
+
+bool g_combatPitchPatchActive = false;
+bool g_scanOrbitCameraPatchActive = false;
+uint64_t g_lastCombatPitchPatchLogTick = 0;
+uint64_t g_lastScanOrbitCameraPatchLogTick = 0;
+uint64_t g_lastScanLockPitchRestoreLogTick = 0;
 
 bool IsMem1Range(uint32_t gcAddr, size_t size) {
     if (gcAddr < kMem1Start || gcAddr >= kMem1Start + kMem1Size) {
@@ -1291,11 +1353,16 @@ bool ApplyPrimedGunDolphinSetupFromHook() {
         Log(L"Applied PrimedGun hotkey config to Dolphin active path: " + path.wstring());
     }
 
+    const bool recommended_settings =
+        !g_activeSharedState || g_activeSharedState->settings.dolphinRecommendedSettings != 0;
+
     for (const fs::path& path : DolphinActiveProfileFiles(L"Config\\Dolphin.ini", false)) {
-        ApplyIniSectionValues(path, "Core",
-                              {{"CPUThread", "True"},
-                               {"MMU", "True"}},
-                              {});
+        if (recommended_settings) {
+            ApplyIniSectionValues(path, "Core",
+                                  {{"CPUThread", "True"},
+                                   {"MMU", "True"}},
+                                  {});
+        }
         ApplyIniSectionValues(path, "VR", {{"EnableVR", "True"}}, {});
         wrote_any = true;
         Log(L"Applied PrimedGun Dolphin global config to Dolphin active path: " +
@@ -1309,15 +1376,17 @@ bool ApplyPrimedGunDolphinSetupFromHook() {
     }
 
     for (const fs::path& path : DolphinActiveProfileFiles(L"GameSettings\\GM8E01.ini", false)) {
-        ApplyIniSectionValues(path, "Core",
-                              {{"CPUThread", "True"},
-                               {"MMU", "True"},
-                               {"FPRF", "False"},
-                               {"SyncGPU", "False"},
-                               {"FastDiscSpeed", "True"},
-                               {"DSPHLE", "True"},
-                               {"GPUDeterminismMode", "auto"}},
-                              {});
+        if (recommended_settings) {
+            ApplyIniSectionValues(path, "Core",
+                                  {{"CPUThread", "True"},
+                                   {"MMU", "True"},
+                                   {"FPRF", "False"},
+                                   {"SyncGPU", "False"},
+                                   {"FastDiscSpeed", "True"},
+                                   {"DSPHLE", "True"},
+                                   {"GPUDeterminismMode", "auto"}},
+                                  {});
+        }
         ApplyIniSectionValues(path, "Video_Stereoscopy",
                               {{"StereoDepthPercentage", "100"},
                                {"StereoConvergence", "20.00"},
@@ -1486,13 +1555,16 @@ void DumpFirstPersonCameraCodeOnce() {
     if (g_dumpedFirstPersonCameraCode || !g_memBase) {
         return;
     }
-    g_dumpedFirstPersonCameraCode = true;
 
     uint8_t* bytes = HostPtr(kFirstPersonCameraStart, kFirstPersonCameraEnd - kFirstPersonCameraStart);
     if (!bytes) {
         Log(L"GameTimingHooks failed to dump CFirstPersonCamera PPC range: no host pointer.");
         return;
     }
+    if (ReadU32(0x8000E7B4u) == 0 || ReadU32(0x8000F128u) == 0) {
+        return;
+    }
+    g_dumpedFirstPersonCameraCode = true;
 
     const fs::path dumpDir = LocalAppDataPath() / L"PrimedGun" / L"CodeDumps";
     std::error_code ec;
@@ -1508,6 +1580,9 @@ void DumpFirstPersonCameraCodeOnce() {
 }
 
 void PatchOrbitCode() {
+    // The dynamic combat pitch patch below handles lock-on without touching
+    // scan mode. Leave the branch-local camera vectors alone because scan can
+    // use the p304=0 branch while the scan visor is active.
     return;
 
     if (!g_memBase) {
@@ -1520,7 +1595,7 @@ void PatchOrbitCode() {
         }
 
         const uint32_t current = ReadU32(patch.address);
-        if (current == kLoadZeroToF2) {
+        if (current == patch.replacement) {
             patch.applied = true;
             Log(L"GameTimingHooks orbit PPC patch already present at 0x" +
                 std::to_wstring(patch.address) + L": " + patch.description);
@@ -1536,10 +1611,96 @@ void PatchOrbitCode() {
             continue;
         }
 
-        if (WriteU32(patch.address, kLoadZeroToF2)) {
+        if (WriteU32(patch.address, patch.replacement)) {
             patch.applied = true;
             Log(L"GameTimingHooks patched orbit PPC at 0x" +
-                std::to_wstring(patch.address) + L": " + patch.description + L" -> lfs f2,0.0.");
+                std::to_wstring(patch.address) + L": " + patch.description + L".");
+        }
+    }
+}
+
+bool SetDynamicPatchState(const DynamicPpcPatch& patch, bool active) {
+    const uint32_t current = ReadU32(patch.address);
+    const uint32_t desired = active ? patch.replacement : patch.original;
+    if (current == desired) {
+        return true;
+    }
+
+    const uint32_t expected = active ? patch.original : patch.replacement;
+    if (current != expected) {
+        return false;
+    }
+
+    return WriteU32(patch.address, desired);
+}
+
+bool ShouldFlattenCombatPitch(uint32_t stateMgr, uint32_t player) {
+    if (player < kMem1Start) {
+        return false;
+    }
+
+    const uint32_t scanState = ReadU32(player + 0x330);
+    if (scanState != 0) {
+        return false;
+    }
+
+    const uint32_t orbitState = ReadU32(player + kOrbitStateOffset);
+    const uint8_t held0 = ReadU8(stateMgr + kFinalInputOffset + 0x2c);
+    const uint32_t scratchPlayer = ReadU32(kGunTargetHookScratch);
+    const uint16_t scratchUid = ReadU16(kGunTargetHookScratch + 4);
+
+    const bool buttonLock = (held0 & 0x04u) != 0;
+    const bool scratchLock = scratchPlayer == player && scratchUid != 0xffffu;
+    const bool orbitActive = orbitState != 0 && orbitState != kOrbitStateGrapple;
+    return buttonLock || scratchLock || orbitActive;
+}
+
+void UpdateCombatPitchPatchForLogicTick() {
+    if (!g_installed.load() || !ResolveMemBase()) {
+        return;
+    }
+
+    const uint32_t stateMgr = kStateManager;
+    const uint32_t player = ReadU32(stateMgr + kPlayerOffset);
+    const bool shouldBeActive = ShouldFlattenCombatPitch(stateMgr, player);
+
+    bool allOk = true;
+    for (const DynamicPpcPatch& patch : g_combatPitchPatches) {
+        allOk = SetDynamicPatchState(patch, shouldBeActive) && allOk;
+    }
+
+    if (allOk && shouldBeActive != g_combatPitchPatchActive) {
+        g_combatPitchPatchActive = shouldBeActive;
+        const uint64_t now = GetTickCount64();
+        if (LoggingEnabled() && now - g_lastCombatPitchPatchLogTick >= 100) {
+            g_lastCombatPitchPatchLogTick = now;
+            Log(std::wstring(L"GameTimingHooks combat pitch patch ") +
+                (shouldBeActive ? L"enabled" : L"disabled"));
+        }
+    }
+}
+
+void UpdateScanOrbitCameraPatchForLogicTick() {
+    if (!g_installed.load() || !ResolveMemBase()) {
+        return;
+    }
+
+    const uint32_t stateMgr = kStateManager;
+    const uint32_t player = ReadU32(stateMgr + kPlayerOffset);
+    const bool shouldBeActive = player >= kMem1Start && ReadU32(player + 0x330) != 0;
+
+    bool allOk = true;
+    for (const DynamicPpcPatch& patch : g_scanOrbitCameraPatches) {
+        allOk = SetDynamicPatchState(patch, shouldBeActive) && allOk;
+    }
+
+    if (allOk && shouldBeActive != g_scanOrbitCameraPatchActive) {
+        g_scanOrbitCameraPatchActive = shouldBeActive;
+        const uint64_t now = GetTickCount64();
+        if (LoggingEnabled() && now - g_lastScanOrbitCameraPatchLogTick >= 100) {
+            g_lastScanOrbitCameraPatchLogTick = now;
+            Log(std::wstring(L"GameTimingHooks scan orbit camera patch ") +
+                (shouldBeActive ? L"enabled" : L"disabled"));
         }
     }
 }
@@ -1559,9 +1720,6 @@ void ApplySharedPatches(SharedState* state) {
 
     for (uint32_t i = 0; i < state->patch.count; ++i) {
         GamePatch& patch = state->patch.patches[i];
-        if (!patch.enabled || patch.applied) {
-            continue;
-        }
         if (!IsMem1Range(patch.address, 4)) {
             patch.lastSeen = 0xffffffffu;
             continue;
@@ -1569,9 +1727,33 @@ void ApplySharedPatches(SharedState* state) {
 
         const uint32_t current = ReadU32(patch.address);
         patch.lastSeen = current;
+        if (!patch.enabled) {
+            patch.applied = 0;
+            const auto original = g_appPatchOriginals.find(patch.address);
+            if (original != g_appPatchOriginals.end() && current == patch.value &&
+                WriteU32(patch.address, original->second)) {
+                patch.lastSeen = original->second;
+                Log(L"GameTimingHooks restored disabled app patch[" + std::to_wstring(i) +
+                    L"] address=0x" + std::to_wstring(patch.address));
+            }
+            continue;
+        }
+
+        if (patch.applied) {
+            continue;
+        }
+
+        if (current == patch.value) {
+            patch.applied = 1;
+            continue;
+        }
+
         if (patch.requireOriginal && current != patch.original) {
             continue;
         }
+
+        if (g_appPatchOriginals.find(patch.address) == g_appPatchOriginals.end())
+            g_appPatchOriginals.emplace(patch.address, current);
 
         if (WriteU32(patch.address, patch.value)) {
             patch.applied = 1;
@@ -1634,6 +1816,285 @@ bool OrbitLockHeldLatched(uint32_t stateMgr, uint32_t player) {
         return true;
     }
     return now < g_lockLatchUntilTick;
+}
+
+std::wstring Hex32(uint32_t value);
+std::wstring FloatText(float value);
+
+bool ResolveActiveCameraTransform(uint32_t stateMgr, uint32_t& camera, uint32_t& cameraXf) {
+    camera = 0;
+    cameraXf = 0;
+    const uint32_t cameraManager = ReadU32(stateMgr + kCameraManagerOffset);
+    if (cameraManager < kMem1Start) {
+        return false;
+    }
+
+    const uint16_t cameraUid = static_cast<uint16_t>(ReadU32(cameraManager) >> 16);
+    if (cameraUid == 0xffffu) {
+        return false;
+    }
+
+    const uint32_t objectList = ReadU32(stateMgr + kObjectListOffset);
+    if (objectList < kMem1Start) {
+        return false;
+    }
+
+    camera = ReadU32(objectList + ((cameraUid & 0x3ffu) << 3) + 4);
+    if (camera < kMem1Start) {
+        return false;
+    }
+
+    cameraXf = camera + kTransformOffset;
+    return true;
+}
+
+std::wstring Hex8(uint8_t value) {
+    wchar_t buffer[8] = {};
+    swprintf_s(buffer, L"0x%02X", static_cast<unsigned int>(value));
+    return buffer;
+}
+
+std::wstring Hex16(uint16_t value) {
+    wchar_t buffer[10] = {};
+    swprintf_s(buffer, L"0x%04X", static_cast<unsigned int>(value));
+    return buffer;
+}
+
+std::wstring Hex32(uint32_t value) {
+    wchar_t buffer[16] = {};
+    swprintf_s(buffer, L"0x%08X", value);
+    return buffer;
+}
+
+std::wstring FloatText(float value) {
+    wchar_t buffer[32] = {};
+    if (std::isfinite(value)) {
+        swprintf_s(buffer, L"%.5f", static_cast<double>(value));
+    } else {
+        swprintf_s(buffer, L"nan");
+    }
+    return buffer;
+}
+
+bool Normalize2(float& x, float& y) {
+    const float lenSq = (x * x) + (y * y);
+    if (!std::isfinite(lenSq) || lenSq < 0.000001f) {
+        return false;
+    }
+
+    const float invLen = 1.0f / std::sqrt(lenSq);
+    x *= invLen;
+    y *= invLen;
+    return true;
+}
+
+void RestoreScanLockCameraPitchForLogicTick() {
+    if (!g_installed.load() || !ResolveMemBase()) {
+        return;
+    }
+
+    const uint32_t stateMgr = kStateManager;
+    const uint32_t player = ReadU32(stateMgr + kPlayerOffset);
+    if (player < kMem1Start) {
+        return;
+    }
+
+    const uint32_t scanState = ReadU32(player + 0x330);
+    if (scanState == 0) {
+        return;
+    }
+
+    const uint8_t held0 = ReadU8(stateMgr + kFinalInputOffset + 0x2c);
+    const uint32_t scratchPlayer = ReadU32(kGunTargetHookScratch);
+    const uint16_t scratchUid = ReadU16(kGunTargetHookScratch + 4);
+    const uint32_t orbitState = ReadU32(player + kOrbitStateOffset);
+    const bool buttonLock = (held0 & 0x04u) != 0;
+    const bool scratchLock = scratchPlayer == player && scratchUid != 0xffffu;
+    const bool orbitActive = orbitState != 0 && orbitState != kOrbitStateGrapple;
+    if (!buttonLock && !scratchLock && !orbitActive) {
+        return;
+    }
+
+    float pitch = ReadFloat(player + kFirstPersonPitchOffset);
+    if (!std::isfinite(pitch)) {
+        return;
+    }
+    pitch = std::clamp(pitch, -1.35f, 1.35f);
+
+    uint32_t camera = 0;
+    uint32_t cameraXf = 0;
+    if (!ResolveActiveCameraTransform(stateMgr, camera, cameraXf)) {
+        return;
+    }
+
+    float forwardX = ReadFloat(cameraXf + 0x10);
+    float forwardY = ReadFloat(cameraXf + 0x14);
+    if (!Normalize2(forwardX, forwardY)) {
+        float rightX = ReadFloat(cameraXf + 0x00);
+        float rightY = ReadFloat(cameraXf + 0x04);
+        if (!Normalize2(rightX, rightY)) {
+            return;
+        }
+        forwardX = -rightY;
+        forwardY = rightX;
+    }
+
+    const float sinPitch = std::sin(pitch);
+    const float cosPitch = std::cos(pitch);
+    WriteFloat(cameraXf + 0x10, forwardX * cosPitch);
+    WriteFloat(cameraXf + 0x14, forwardY * cosPitch);
+    WriteFloat(cameraXf + 0x18, sinPitch);
+    WriteFloat(cameraXf + 0x20, -forwardX * sinPitch);
+    WriteFloat(cameraXf + 0x24, -forwardY * sinPitch);
+    WriteFloat(cameraXf + 0x28, cosPitch);
+
+    const uint64_t now = GetTickCount64();
+    if (LoggingEnabled() && now - g_lastScanLockPitchRestoreLogTick >= 250) {
+        g_lastScanLockPitchRestoreLogTick = now;
+        Log(L"GameTimingHooks restored scan lock camera pitch. orbit=" +
+            std::to_wstring(orbitState) +
+            L" pitch=" + FloatText(pitch) +
+            L" camFwdZ=" + FloatText(sinPitch));
+    }
+}
+
+void TraceOrbitLockForLogicTick() {
+    if (!LoggingEnabled() || !g_installed.load() || !ResolveMemBase()) {
+        return;
+    }
+
+    constexpr uint32_t kTraceFrames = 180u;
+    const uint32_t stateMgr = kStateManager;
+    const uint32_t player = ReadU32(stateMgr + kPlayerOffset);
+    if (player < kMem1Start) {
+        g_traceLastLockHeld = false;
+        g_traceFramesRemaining = 0;
+        g_traceHavePitch = false;
+        return;
+    }
+
+    const uint8_t held0 = ReadU8(stateMgr + kFinalInputOffset + 0x2c);
+    const uint8_t pressed0 = ReadU8(stateMgr + kFinalInputOffset + 0x2e);
+    const uint32_t scratchPlayer = ReadU32(kGunTargetHookScratch);
+    const uint16_t scratchUid = ReadU16(kGunTargetHookScratch + 4);
+    const bool buttonLock = (held0 & 0x04u) != 0;
+    const bool scratchLock = scratchPlayer == player && scratchUid != 0xffffu;
+    const bool lockHeld = buttonLock || scratchLock;
+    const uint32_t orbitState = ReadU32(player + kOrbitStateOffset);
+    const uint32_t scanState = ReadU32(player + 0x330);
+    uint32_t camera = 0;
+    uint32_t cameraXf = 0;
+    const bool haveCamera = ResolveActiveCameraTransform(stateMgr, camera, cameraXf);
+    const float cameraFwdZ = haveCamera ? ReadFloat(cameraXf + 0x18) : 0.0f;
+    const bool cameraPitchJump = haveCamera && g_traceHaveCamera &&
+        std::fabs(cameraFwdZ - g_traceLastCameraFwdZ) > 0.02f;
+    const bool orbitChanged = orbitState != g_traceLastOrbitState;
+    const bool scanChanged = scanState != g_traceLastScanState;
+    const bool buttonChanged = buttonLock != g_traceLastButtonLock;
+    const float pitch = ReadFloat(player + kFirstPersonPitchOffset);
+    const bool pitchJump = g_traceHavePitch && std::isfinite(pitch) &&
+        std::fabs(pitch - g_traceLastPitch) > 0.01f;
+
+    if (lockHeld != g_traceLastLockHeld || orbitChanged || scanChanged || buttonChanged ||
+        pitchJump || cameraPitchJump) {
+        if (lockHeld != g_traceLastLockHeld) {
+            ++g_traceSequence;
+            g_traceStartTick = GetTickCount64();
+            g_traceLastLogTick = 0;
+            Log(std::wstring(L"OrbitTrace transition seq=") +
+                std::to_wstring(g_traceSequence) +
+                L" lock=" + std::to_wstring(lockHeld ? 1 : 0) +
+                L" buttonLock=" + std::to_wstring(buttonLock ? 1 : 0) +
+                L" scratchLock=" + std::to_wstring(scratchLock ? 1 : 0) +
+                L" orbit=" + std::to_wstring(orbitState) +
+                L" scan=" + std::to_wstring(scanState) +
+                L" pitch=" + FloatText(pitch) +
+                L" camFwdZ=" + FloatText(cameraFwdZ));
+        } else if (orbitChanged || scanChanged || buttonChanged || cameraPitchJump) {
+            if (g_traceFramesRemaining == 0) {
+                ++g_traceSequence;
+                g_traceStartTick = GetTickCount64();
+                g_traceLastLogTick = 0;
+            }
+            Log(std::wstring(L"OrbitTrace state seq=") +
+                std::to_wstring(g_traceSequence) +
+                L" buttonLock=" + std::to_wstring(buttonLock ? 1 : 0) +
+                L" scratchLock=" + std::to_wstring(scratchLock ? 1 : 0) +
+                L" orbit=" + std::to_wstring(orbitState) +
+                L" scan=" + std::to_wstring(scanState) +
+                L" camFwdZ=" + FloatText(cameraFwdZ));
+        }
+        g_traceFramesRemaining = std::max(g_traceFramesRemaining, kTraceFrames);
+    }
+    g_traceLastLockHeld = lockHeld;
+    g_traceLastOrbitState = orbitState;
+    g_traceLastScanState = scanState;
+    g_traceLastButtonLock = buttonLock;
+    g_traceHavePitch = std::isfinite(pitch);
+    g_traceLastPitch = pitch;
+    g_traceHaveCamera = haveCamera && std::isfinite(cameraFwdZ);
+    g_traceLastCameraFwdZ = cameraFwdZ;
+
+    if (g_traceFramesRemaining == 0) {
+        return;
+    }
+    --g_traceFramesRemaining;
+
+    const uint64_t now = GetTickCount64();
+    if (g_traceLastLogTick != 0 && now - g_traceLastLogTick < 8) {
+        return;
+    }
+    g_traceLastLogTick = now;
+
+    const uint64_t elapsed = now - g_traceStartTick;
+    const uint32_t objectList = ReadU32(stateMgr + kObjectListOffset);
+    uint32_t scratchObj = 0;
+    if (objectList >= kMem1Start && scratchUid != 0xffffu) {
+        scratchObj = ReadU32(objectList + ((scratchUid & 0x3ffu) << 3) + 4);
+    }
+
+    Log(std::wstring(L"OrbitTrace seq=") + std::to_wstring(g_traceSequence) +
+        L" tMs=" + std::to_wstring(elapsed) +
+        L" lock=" + std::to_wstring(lockHeld ? 1 : 0) +
+        L" buttonLock=" + std::to_wstring(buttonLock ? 1 : 0) +
+        L" scratchLock=" + std::to_wstring(scratchLock ? 1 : 0) +
+        L" held0=" + Hex8(held0) +
+        L" press0=" + Hex8(pressed0) +
+        L" orbit=" + std::to_wstring(orbitState) +
+        L" scan=" + std::to_wstring(scanState) +
+        L" cam=" + std::to_wstring(ReadU32(player + 0x2f4)) +
+        L" morph=" + std::to_wstring(ReadU32(player + 0x2f8)) +
+        L" move=" + std::to_wstring(ReadU32(player + 0x258)) +
+        L" free=" + Hex32(ReadU32(player + 0x3dc)) +
+        L" pitch=" + FloatText(pitch) +
+        L" pitchVel=" + FloatText(ReadFloat(player + kFirstPersonPitchVelOffset)) +
+        L" yaw=" + FloatText(ReadFloat(player + 0x3e4)) +
+        L" yawVel=" + FloatText(ReadFloat(player + 0x3e8)) +
+        L" camera=" + Hex32(camera) +
+        L" camFwdZ=" + FloatText(cameraFwdZ) +
+        L" camUpZ=" + FloatText(haveCamera ? ReadFloat(cameraXf + 0x28) : 0.0f) +
+        L" camPos=" + FloatText(haveCamera ? ReadFloat(cameraXf + 0x0c) : 0.0f) +
+        L"," + FloatText(haveCamera ? ReadFloat(cameraXf + 0x1c) : 0.0f) +
+        L"," + FloatText(haveCamera ? ReadFloat(cameraXf + 0x2c) : 0.0f) +
+        L" f29c=" + FloatText(ReadFloat(player + 0x29c)) +
+        L" b374=" + std::to_wstring(static_cast<unsigned int>(ReadU8(player + 0x374))) +
+        L" b3dc=" + std::to_wstring(static_cast<unsigned int>(ReadU8(player + 0x3dc))) +
+        L" b3dd=" + std::to_wstring(static_cast<unsigned int>(ReadU8(player + 0x3dd))) +
+        L" scratchPlayer=" + Hex32(scratchPlayer) +
+        L" scratchUid=" + Hex16(scratchUid) +
+        L" scratchObj=" + Hex32(scratchObj) +
+        L" ppcE7B4=" + Hex32(ReadU32(0x8000E7B4u)) +
+        L" ppcE808=" + Hex32(ReadU32(0x8000E808u)) +
+        L" ppcE83C=" + Hex32(ReadU32(0x8000E83Cu)) +
+        L" ppcF050=" + Hex32(ReadU32(0x8000F050u)) +
+        L" ppcEB44=" + Hex32(ReadU32(0x8000EB44u)) +
+        L" ppcEBEC=" + Hex32(ReadU32(0x8000EBECu)) +
+        L" ppcEF44=" + Hex32(ReadU32(0x8000EF44u)) +
+        L" ppcEFF4=" + Hex32(ReadU32(0x8000EFF4u)) +
+        L" ppcF128=" + Hex32(ReadU32(0x8000F128u)) +
+        L" ppcF184=" + Hex32(ReadU32(0x8000F184u)) +
+        L" ppcF50C=" + Hex32(ReadU32(0x8000F50Cu)) +
+        L" ppcF5C0=" + Hex32(ReadU32(0x8000F5C0u)));
 }
 
 } // namespace
@@ -1702,6 +2163,12 @@ void SuppressLockCameraPitchForLogicTick() {
     }
 }
 
+void PollFast(SharedState*) {
+    UpdateCombatPitchPatchForLogicTick();
+    UpdateScanOrbitCameraPatchForLogicTick();
+    TraceOrbitLockForLogicTick();
+}
+
 void Poll(SharedState* state) {
     if (g_installed.load()) {
         g_activeSharedState = state;
@@ -1716,13 +2183,18 @@ void Poll(SharedState* state) {
         if (ResolveMemBase()) {
             DumpPlayerOrbitCodeOnce();
             DumpFirstPersonCameraCodeOnce();
-            PatchOrbitCode();
             ApplySharedPatches(state);
+            PatchOrbitCode();
         }
     }
 }
 
 void Shutdown() {
+    if (ResolveMemBase()) {
+        for (const DynamicPpcPatch& patch : g_combatPitchPatches) {
+            SetDynamicPatchState(patch, false);
+        }
+    }
     if (g_installed.exchange(false)) {
         if (g_symbolsInitialized) {
             SymCleanup(GetCurrentProcess());
