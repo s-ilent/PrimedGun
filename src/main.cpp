@@ -30,6 +30,7 @@
 #include "gui.h"
 #include "resource.h"
 #include "PrimedGunShared.h"
+#include "HookLayout.h"
 
 namespace fs = std::filesystem;
 
@@ -76,6 +77,7 @@ struct LoadedPatch {
     uint32_t address = 0;
     uint32_t value = 0;
     bool enabled = true;
+    std::string group;
 };
 static std::mutex g_gun_target_mutex;
 static Pose g_latest_pose = {};
@@ -106,13 +108,13 @@ static float g_last_desired_basis[9] = {};
 static bool g_last_written_basis_valid = false;
 static bool g_last_desired_basis_valid = false;
 static float g_directional_move_speed = 0.0f;
-static constexpr uint32_t k_render_hook_basis_addr = 0x817FE000;
+static constexpr uint32_t k_render_hook_basis_addr = PrimedGun::HookLayout::CannonBasisScratch;
 static constexpr uint32_t k_render_hook_expected_gun_addr = k_render_hook_basis_addr + 0x38;
 static constexpr uint32_t k_render_hook_model_offset_world_addr = k_render_hook_basis_addr + 0x40;
-static constexpr uint32_t k_projectile_fire_debug_addr = 0x817FE100;
-static constexpr uint32_t k_projectile_probe_debug_addr = 0x817FE300;
-static constexpr uint32_t k_gun_target_hook_addr = 0x817FE400;
-static constexpr uint32_t k_reticle_billboard_basis_addr = 0x817FE500;
+static constexpr uint32_t k_projectile_fire_debug_addr = PrimedGun::HookLayout::ProjectileDebugScratch;
+static constexpr uint32_t k_projectile_probe_debug_addr = PrimedGun::HookLayout::ProjectileProbeScratch;
+static constexpr uint32_t k_gun_target_hook_addr = PrimedGun::HookLayout::GunTargetScratch;
+static constexpr uint32_t k_reticle_billboard_basis_addr = PrimedGun::HookLayout::ReticleBillboardScratch;
 static constexpr uint32_t k_final_input_offset = 0xB54;
 static constexpr uint32_t k_final_input_right_stick_x = k_final_input_offset + 0x10;
 static constexpr uint32_t k_final_input_right_stick_y = k_final_input_offset + 0x14;
@@ -258,6 +260,66 @@ static std::string patch_group_name_from_header(const std::string& raw_line) {
         name = trim_ascii(name.substr(prefix.size()));
 
     return name.empty() ? "Ungrouped" : name;
+}
+
+static bool validate_app_patch_layout(const std::vector<LoadedPatch>& patches) {
+    bool ok = true;
+
+    for (size_t i = 0; i < patches.size(); ++i) {
+        const LoadedPatch& a = patches[i];
+        for (size_t j = i + 1; j < patches.size(); ++j) {
+            const LoadedPatch& b = patches[j];
+            if (a.address == b.address && a.value != b.value) {
+                ok = false;
+                app_hook_log(L"Patch layout warning: duplicate app patch address 0x" +
+                    hex32(a.address) + L" in [" + widen_ascii(a.group) + L"] and [" +
+                    widen_ascii(b.group) + L"] with different values.");
+            }
+        }
+
+        const bool in_app_cave =
+            a.address >= PrimedGun::HookLayout::AppArCaveStart &&
+            a.address < PrimedGun::HookLayout::AppArCaveEnd;
+        const bool in_dll_cave =
+            a.address >= PrimedGun::HookLayout::DllCaveStart &&
+            a.address < PrimedGun::HookLayout::DllCaveEnd;
+        if (in_dll_cave) {
+            ok = false;
+            app_hook_log(L"Patch layout warning: app-owned patch [" + widen_ascii(a.group) +
+                L"] writes into DLL-owned cave space at 0x" + hex32(a.address) + L".");
+        } else if (a.address >= PrimedGun::HookLayout::AppArCaveStart &&
+                   a.address < PrimedGun::HookLayout::DllCaveEnd && !in_app_cave) {
+            ok = false;
+            app_hook_log(L"Patch layout warning: app-owned patch [" + widen_ascii(a.group) +
+                L"] writes into unassigned cave space at 0x" + hex32(a.address) + L".");
+        }
+    }
+
+    for (const auto& app_range : PrimedGun::HookLayout::ScratchRanges) {
+        for (const auto& other : PrimedGun::HookLayout::ScratchRanges) {
+            if (&app_range >= &other)
+                continue;
+            if (PrimedGun::HookLayout::Overlaps(app_range, other)) {
+                ok = false;
+                app_hook_log(L"Hook scratch layout warning: [" + widen_ascii(app_range.owner) +
+                    L"] overlaps [" + widen_ascii(other.owner) + L"].");
+            }
+        }
+    }
+
+    for (const auto& dll_range : PrimedGun::HookLayout::DllCaveRanges) {
+        for (const auto& other : PrimedGun::HookLayout::DllCaveRanges) {
+            if (&dll_range >= &other)
+                continue;
+            if (PrimedGun::HookLayout::Overlaps(dll_range, other)) {
+                ok = false;
+                app_hook_log(L"Hook cave layout warning: [" + widen_ascii(dll_range.owner) +
+                    L"] overlaps [" + widen_ascii(other.owner) + L"].");
+            }
+        }
+    }
+
+    return ok;
 }
 
 static constexpr std::string_view kPrimedGunBuiltinPatchIni = R"PGINI(
@@ -1311,6 +1373,7 @@ static std::vector<LoadedPatch> load_app_patch_files() {
                 current_group_enabled = g_settings.ar_code_enabled(current_group);
             }
             ++total_patch_lines;
+            patch.group = current_group;
             patch.enabled = current_group_enabled;
             if (!patch.enabled)
                 ++skipped_patch_lines;
@@ -1327,6 +1390,8 @@ static std::vector<LoadedPatch> load_app_patch_files() {
         L" enabled built-in app patch line(s)" +
         L" (" + std::to_wstring(skipped_patch_lines) +
         L" disabled of " + std::to_wstring(total_patch_lines) + L").");
+    if (validate_app_patch_layout(patches))
+        app_hook_log(L"Hook layout validation passed.");
     return patches;
 }
 

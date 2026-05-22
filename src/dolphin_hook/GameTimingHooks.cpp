@@ -1,5 +1,6 @@
 #include "GameTimingHooks.h"
 
+#include "HookLayout.h"
 #include "PrimedGunShared.h"
 
 #include <windows.h>
@@ -46,7 +47,7 @@ constexpr uint32_t kPlayerOffset = 0x84Cu;
 constexpr uint32_t kObjectListOffset = 0x810u;
 constexpr uint32_t kCameraManagerOffset = 0x86Cu;
 constexpr uint32_t kTransformOffset = 0x34u;
-constexpr uint32_t kGunTargetHookScratch = 0x817FE400u;
+constexpr uint32_t kGunTargetHookScratch = HookLayout::GunTargetScratch;
 constexpr uint32_t kFinalInputOffset = 0xB54u;
 constexpr uint32_t kFinalInputRightStickY = kFinalInputOffset + 0x14u;
 constexpr uint32_t kFinalInputRightStickYPress = kFinalInputOffset + 0x23u;
@@ -55,12 +56,13 @@ constexpr uint32_t kFirstPersonPitchOffset = 0x3ECu;
 constexpr uint32_t kFirstPersonPitchVelOffset = 0x3F0u;
 constexpr uint32_t kOrbitStateGrapple = 5u;
 constexpr uint32_t kCPlayerGunRenderStart = 0x80041A8Cu;
-constexpr uint32_t kCPlayerGunRenderModelOffsetCave = 0x80001C00u;
-constexpr uint32_t kRenderHookModelOffsetWorldScratch = 0x817FE040u;
-constexpr uint32_t kRenderHookAdjustedGunPosScratch = 0x817FE050u;
+constexpr uint32_t kCPlayerGunRenderModelOffsetCave = HookLayout::RenderModelOffsetCave;
+constexpr uint32_t kRenderHookModelOffsetWorldScratch = HookLayout::ModelOffsetWorldScratch;
+constexpr uint32_t kRenderHookAdjustedGunPosScratch = HookLayout::AdjustedGunPosScratch;
 constexpr uint32_t kFirstPersonUpdateElevationPitchStore = 0x8000FA50u;
 constexpr uint32_t kFirstPersonUpdateElevationPitchStoreOriginal = 0xD01D01C0u;
-constexpr uint32_t kFirstPersonUpdateElevationPitchStoreCave = 0x80001C80u;
+constexpr uint32_t kFirstPersonUpdateElevationPitchStoreCave =
+    HookLayout::FirstPersonElevationPitchCave;
 
 std::atomic<bool> g_installed = false;
 uintptr_t g_memBase = 0;
@@ -155,26 +157,6 @@ struct PpcPatch {
     bool loggedWaiting;
 };
 
-struct ConditionalOrbitPatch {
-    uint32_t address;
-    uint32_t original;
-    uint32_t flattened;
-    uint16_t flattenedStackOffset;
-    uint32_t cave;
-    const wchar_t* description;
-    bool applied;
-    bool loggedWaiting;
-};
-
-ConditionalOrbitPatch g_orbitPatches[] = {
-    {0x8000EBECu, 0x3881044Cu, 0x388103FCu, 0x03FCu, 0x80001AD0u,
-     L"CFirstPersonCamera pre-orbit scan-aware flattened target vector", false, false},
-    {0x8000EFF4u, 0x3881044Cu, 0x38810394u, 0x0394u, 0x80001B00u,
-     L"CFirstPersonCamera normal lock-on scan-aware flattened target vector", false, false},
-    {0x8000F5C0u, 0x3881044Cu, 0x38810320u, 0x0320u, 0x80001B30u,
-     L"CFirstPersonCamera early follow scan-aware flattened target vector", false, false},
-};
-
 struct ConditionalPitchLoadPatch {
     uint32_t address;
     uint32_t original;
@@ -185,7 +167,7 @@ struct ConditionalPitchLoadPatch {
 };
 
 ConditionalPitchLoadPatch g_firstPersonPitchLoadPatch = {
-    0x8000E548u, 0xC3FE03ECu, 0x80001B70u,
+    0x8000E548u, 0xC3FE03ECu, HookLayout::FirstPersonPitchLoadCave,
     L"CFirstPersonCamera scan-aware first-person pitch load", false, false};
 
 constexpr uint32_t kLoadZeroToF2 = 0xC04280B0u; // lfs f2, -0x7f50(r2)
@@ -203,11 +185,11 @@ struct DynamicPpcPatch {
 };
 
 DynamicPpcPatch g_combatPitchPatches[] = {
-    {0x8000E7B4u, 0xEC21E828u, kLoadZeroToF1, 0x80001AD0u,
+    {0x8000E7B4u, 0xEC21E828u, kLoadZeroToF1, HookLayout::CombatPitchCave0,
      L"CFirstPersonCamera lock target Z delta A", false, false},
-    {0x8000E808u, 0xEC21E828u, kLoadZeroToF1, 0x80001B00u,
+    {0x8000E808u, 0xEC21E828u, kLoadZeroToF1, HookLayout::CombatPitchCave1,
      L"CFirstPersonCamera lock target Z delta B", false, false},
-    {0x8000E83Cu, 0xEC21E828u, kLoadZeroToF1, 0x80001B30u,
+    {0x8000E83Cu, 0xEC21E828u, kLoadZeroToF1, HookLayout::CombatPitchCave2,
      L"CFirstPersonCamera lock target Z delta C", false, false},
 };
 
@@ -227,7 +209,7 @@ RenderModelOffsetPatch g_renderModelOffsetPatch = {
 
 DynamicPpcPatch g_combatElevationPitchPatch = {
     kFirstPersonUpdateElevationPitchStore, kFirstPersonUpdateElevationPitchStoreOriginal,
-    kLoadZeroToF1, kFirstPersonUpdateElevationPitchStoreCave,
+    kLoadZeroToF1, HookLayout::CombatElevationPitchCave,
     L"CFirstPersonCamera script pitch/elevation store", false, false};
 
 bool IsMem1Range(uint32_t gcAddr, size_t size) {
@@ -251,10 +233,6 @@ uint32_t PpcBeq(uint32_t from, uint32_t to) {
 uint32_t PpcBne(uint32_t from, uint32_t to) {
     const int32_t offset = static_cast<int32_t>(to - from);
     return 0x40820000u | (static_cast<uint32_t>(offset) & 0x0000FFFCu);
-}
-
-uint32_t PpcAddiR4R1(uint16_t offset) {
-    return 0x38810000u | offset;
 }
 
 std::string TrimAscii(const std::string& text) {
@@ -1749,59 +1727,8 @@ void DumpFirstPersonCameraCodeOnce() {
 }
 
 void PatchOrbitCode() {
-    // The dynamic combat pitch patch handles orbit lock without touching scan mode.
-    return;
-
-    if (!g_memBase) {
-        return;
-    }
-
-    for (ConditionalOrbitPatch& patch : g_orbitPatches) {
-        if (patch.applied) {
-            continue;
-        }
-
-        const uint32_t current = ReadU32(patch.address);
-        const uint32_t branch = PpcBranch(patch.address, patch.cave);
-        if (current == branch) {
-            patch.applied = true;
-            Log(L"GameTimingHooks orbit PPC patch already present at 0x" +
-                std::to_wstring(patch.address) + L": " + patch.description);
-            continue;
-        }
-
-        if (current != patch.original && current != patch.flattened) {
-            if (current != 0 && !patch.loggedWaiting) {
-                patch.loggedWaiting = true;
-                Log(L"GameTimingHooks waiting to patch orbit PPC at 0x" +
-                    std::to_wstring(patch.address) + L": current instruction does not match expected yet.");
-            }
-            continue;
-        }
-
-        const uint32_t originalLabel = patch.cave + 0x20u;
-        const uint32_t flattenedLabel = patch.cave + 0x28u;
-        const uint32_t returnAddr = patch.address + 4u;
-
-        WriteU32(patch.cave + 0x00u, 0x3D808045u);                      // lis r12, 0x8045
-        WriteU32(patch.cave + 0x04u, 0x618CA1A8u);                      // ori r12, r12, 0xA1A8
-        WriteU32(patch.cave + 0x08u, 0x818C084Cu);                      // lwz r12, 0x84C(r12)
-        WriteU32(patch.cave + 0x0Cu, 0x2C0C0000u);                      // cmpwi r12, 0
-        WriteU32(patch.cave + 0x10u, PpcBeq(patch.cave + 0x10u, originalLabel));
-        WriteU32(patch.cave + 0x14u, 0x818C0330u);                      // lwz r12, 0x330(r12)
-        WriteU32(patch.cave + 0x18u, 0x2C0C0000u);                      // cmpwi r12, 0
-        WriteU32(patch.cave + 0x1Cu, PpcBeq(patch.cave + 0x1Cu, flattenedLabel));
-        WriteU32(patch.cave + 0x20u, patch.original);
-        WriteU32(patch.cave + 0x24u, PpcBranch(patch.cave + 0x24u, returnAddr));
-        WriteU32(patch.cave + 0x28u, PpcAddiR4R1(patch.flattenedStackOffset));
-        WriteU32(patch.cave + 0x2Cu, PpcBranch(patch.cave + 0x2Cu, returnAddr));
-
-        if (WriteU32(patch.address, branch)) {
-            patch.applied = true;
-            Log(L"GameTimingHooks patched orbit PPC at 0x" +
-                std::to_wstring(patch.address) + L": " + patch.description + L".");
-        }
-    }
+    // Retained as a no-op call site: orbit pitch is now handled by the
+    // scan-conditional combat pitch patches below, using isolated cave ranges.
 }
 
 void PatchFirstPersonPitchLoad() {
