@@ -154,10 +154,7 @@ static fs::path local_app_data_path() {
 }
 
 static void app_hook_log(std::wstring_view message) {
-    if (g_hook_log.is_open()) {
-        g_hook_log << message << L"\n";
-        g_hook_log.flush();
-    }
+    (void)message;
 }
 
 
@@ -168,9 +165,7 @@ static std::wstring hex32(uint32_t value) {
 }
 
 static bool app_logging_enabled() {
-    char value[16] = {};
-    const DWORD len = GetEnvironmentVariableA("PRIMEDGUN_ENABLE_LOGS", value, sizeof(value));
-    return len > 0 && len < sizeof(value) && value[0] == '1';
+    return false;
 }
 
 static std::wstring widen_ascii(std::string_view value) {
@@ -449,9 +444,6 @@ $PrimedGun XR Visor D-Pad Timing Hook
 04001DE0 38210010
 04001DE4 4E800020
 
-$PrimedGun Disable Visor Blur
-041133D8 48000040
-
 $PrimedGun Cannon Rotation Hook
 04040FEC 4BFC0854
 04001840 807C0740
@@ -571,13 +563,6 @@ $PrimedGun Reticle Hook
 )PGINI";
 
 static void open_app_hook_log() {
-    if (!app_logging_enabled())
-        return;
-
-    std::error_code ec;
-    const fs::path log_dir = local_app_data_path() / L"PrimedGun";
-    fs::create_directories(log_dir, ec);
-    g_hook_log.open(log_dir / L"PrimedGun_AppHook.log", std::ios::app);
 }
 
 static fs::path exe_directory() {
@@ -1452,15 +1437,7 @@ static std::vector<LoadedPatch> load_app_patch_files() {
         const std::string trimmed = trim_ascii(line);
         if (!trimmed.empty() && trimmed.front() == '$') {
             current_group = Settings::normalized_ar_code_name(patch_group_name_from_header(trimmed));
-            const bool user_toggleable = current_group == "Disable Visor Blur";
-            if (user_toggleable) {
-                settings_changed = g_settings.ensure_ar_code_toggle(current_group) || settings_changed;
-                if (std::find(discovered_groups.begin(), discovered_groups.end(), current_group) ==
-                    discovered_groups.end()) {
-                    discovered_groups.push_back(current_group);
-                }
-            }
-            current_group_enabled = !user_toggleable || g_settings.ar_code_enabled(current_group);
+            current_group_enabled = true;
             continue;
         }
 

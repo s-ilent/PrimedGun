@@ -328,26 +328,6 @@ inline void draw_gui(Settings& s, AppState& app, DolphinMemory& dolphin)
             slider_input("Target radius", &s.gun_targeting_radius, 0.5f, 8.0f, 0.1f, 0.5f, "%.1f");
             s.gun_targeting_distance = std::clamp(s.gun_targeting_distance, 10.0f, 120.0f);
             s.gun_targeting_radius = std::clamp(s.gun_targeting_radius, 0.5f, 8.0f);
-            ImGui::SeparatorText("Visor");
-            if (s.ensure_ar_code_toggle("Disable Visor Blur")) {
-                app.app_patches_apply_requested.store(true, std::memory_order_relaxed);
-            }
-            auto visor_blur_toggle = std::find_if(
-                s.ar_code_toggles.begin(), s.ar_code_toggles.end(),
-                [](const Settings::ArCodeToggle& toggle) {
-                    return toggle.name == "Disable Visor Blur";
-                });
-            if (visor_blur_toggle != s.ar_code_toggles.end() &&
-                ImGui::Checkbox("Disable visor blur", &visor_blur_toggle->enabled)) {
-                app.app_patches_apply_requested.store(true, std::memory_order_relaxed);
-            }
-            ImGui::SeparatorText("Live Target");
-            ImGui::Text("UID %04X  Object %08X  Write %s",
-                        app.dbg_gun_target_uid, app.dbg_gun_target_obj,
-                        app.dbg_gun_target_write ? "yes" : "no");
-            ImGui::Text("Ray %.2f forward  %.2f off  candidates %d",
-                        app.dbg_gun_target_along, app.dbg_gun_target_perp,
-                        app.dbg_gun_target_candidates);
             end_panel();
             ImGui::EndTabItem();
         }

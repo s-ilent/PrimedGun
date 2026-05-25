@@ -119,13 +119,6 @@ struct Settings {
             return "Disable Frustum Culling";
         if (name == "Restore VR rotation after 80040FE8 Hook")
             return "Cannon Rotation Hook";
-        if (name == "Visor Patch" ||
-            name == "Disable Visor Screen Effects" ||
-            name == "Disable Visor Filter A" ||
-            name == "Disable Visor Filter B" ||
-            name == "Disable Visor Distortion" ||
-            name == "Disable Visor Effects")
-            return "Disable Visor Blur";
         return name;
     }
 
@@ -213,9 +206,9 @@ struct Settings {
         f << "world_scale=" << world_scale << "\n";
         f << "require_trigger=" << require_trigger << "\n";
         f << "trigger_threshold=" << trigger_threshold << "\n";
-        f << "show_matrix_debug=" << show_matrix_debug << "\n";
-        f << "show_controller_debug=" << show_controller_debug << "\n";
-        f << "log_cannon_rotation_debug=" << log_cannon_rotation_debug << "\n";
+        f << "show_matrix_debug=0\n";
+        f << "show_controller_debug=0\n";
+        f << "log_cannon_rotation_debug=0\n";
         f << "gun_targeting_enabled=" << gun_targeting_enabled << "\n";
         f << "gun_targeting_distance=" << gun_targeting_distance << "\n";
         f << "gun_targeting_radius=" << gun_targeting_radius << "\n";
@@ -259,9 +252,9 @@ struct Settings {
             else if (key == "world_scale")           world_scale = std::stof(val);
             else if (key == "require_trigger")       require_trigger = std::stoi(val);
             else if (key == "trigger_threshold")     trigger_threshold = std::stof(val);
-            else if (key == "show_matrix_debug")     show_matrix_debug = std::stoi(val);
-            else if (key == "show_controller_debug") show_controller_debug = std::stoi(val);
-            else if (key == "log_cannon_rotation_debug") log_cannon_rotation_debug = std::stoi(val);
+            else if (key == "show_matrix_debug")     show_matrix_debug = false;
+            else if (key == "show_controller_debug") show_controller_debug = false;
+            else if (key == "log_cannon_rotation_debug") log_cannon_rotation_debug = false;
             else if (key == "gun_targeting_enabled") gun_targeting_enabled = std::stoi(val);
             else if (key == "gun_targeting_distance") gun_targeting_distance = std::stof(val);
             else if (key == "gun_targeting_radius") gun_targeting_radius = std::stof(val);
@@ -306,6 +299,9 @@ struct Settings {
         model_offset_x = std::clamp(model_offset_x, -2.0f, 2.0f);
         model_offset_y = std::clamp(model_offset_y, -2.0f, 2.0f);
         model_offset_z = std::clamp(model_offset_z, -2.0f, 2.0f);
+        show_matrix_debug = false;
+        show_controller_debug = false;
+        log_cannon_rotation_debug = false;
         if (migrated_settings)
             save();
     }

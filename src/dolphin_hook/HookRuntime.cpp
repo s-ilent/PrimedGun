@@ -79,28 +79,11 @@ DWORD WINAPI RuntimeThread(void*) {
 } // namespace
 
 bool LoggingEnabled() {
-    return g_logging_enabled;
+    return false;
 }
 
 void Log(std::wstring_view message) {
-    if (g_light_logging_enabled) {
-        const bool keep =
-            message.rfind(L"PrimedGun_DolphinHook", 0) == 0 ||
-            message.rfind(L"PrimedGun hook runtime", 0) == 0 ||
-            message.find(L"GameTimingHooks received app patch") != std::wstring_view::npos ||
-            message.find(L"GameTimingHooks applied app patch[188]") != std::wstring_view::npos ||
-            message.find(L"GameTimingHooks applied app patch[189]") != std::wstring_view::npos ||
-            message.find(L"GameTimingHooks applied app patch[190]") != std::wstring_view::npos ||
-            message.find(L"GameTimingHooks applied app patch[191]") != std::wstring_view::npos ||
-            message.find(L"Visor") != std::wstring_view::npos ||
-            message.find(L"visor") != std::wstring_view::npos;
-        if (!keep)
-            return;
-    }
-    if (g_logging_enabled && g_log.is_open()) {
-        g_log << message << L"\n";
-        g_log.flush();
-    }
+    (void)message;
 }
 
 bool StartRuntime(HMODULE) {
@@ -108,21 +91,8 @@ bool StartRuntime(HMODULE) {
         return true;
     }
 
-    wchar_t log_value[16] = {};
-    const DWORD log_len = GetEnvironmentVariableW(L"PRIMEDGUN_ENABLE_LOGS", log_value,
-                                                  static_cast<DWORD>(std::size(log_value)));
-    g_logging_enabled = log_len > 0 && log_len < std::size(log_value) && log_value[0] == L'1';
-    wchar_t light_log_value[16] = {};
-    const DWORD light_log_len = GetEnvironmentVariableW(L"PRIMEDGUN_LIGHT_LOGS", light_log_value,
-                                                        static_cast<DWORD>(std::size(light_log_value)));
-    g_light_logging_enabled =
-        light_log_len > 0 && light_log_len < std::size(light_log_value) && light_log_value[0] == L'1';
-    if (g_logging_enabled) {
-        const fs::path logDir = LocalAppDataPath() / L"PrimedGun";
-        std::error_code ec;
-        fs::create_directories(logDir, ec);
-        g_log.open(logDir / L"PrimedGun_DolphinHook.log", std::ios::app);
-    }
+    g_logging_enabled = false;
+    g_light_logging_enabled = false;
     Log(L"PrimedGun_DolphinHook loaded.");
 
     g_thread = CreateThread(nullptr, 0, RuntimeThread, nullptr, 0, nullptr);
