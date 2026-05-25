@@ -40,13 +40,6 @@ For distribution/share, the useful files are:
 - In-headset settings menu.
 - Automatic Dolphin OpenXR controller binding setup.
 
-## App-Owned Patches
-
-Patches are applied automatically through the PrimedGun app.
-Each app-owned AR/Gecko code can be enabled or disabled from the `AR Codes` tab.
-
-PrimedGun disables unmanaged AR/Gecko enabled-code lists so PrimedGun's app-owned patch set is the one in control.
-
 ## Usage
 
 1. Launch `PrimedGun.exe`.
