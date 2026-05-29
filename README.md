@@ -4,7 +4,7 @@ PrimedGun is a Dolphin ReduX-based build focused on improving Metroid Prime's VR
 
 ## Build
 
-Use a Visual Studio x64 developer environment, then build the fused PrimeGun/Dolphin executable:
+Use a Visual Studio x64 developer environment, then build the PrimeGun executable:
 
 ```bat
 git clone --recurse-submodules https://github.com/Nobbie248/PrimedGun.git
@@ -21,12 +21,17 @@ For distribution, use the contents of `Binary\x64`. The important runtime pieces
 
 - `PrimedGun.exe`
 - `assets/`
+- `Licenses/`
 - `Sys/`
+- `User/`
 - `QtPlugins/`
-- Qt DLLs copied by the build
+- `COPYING`
+- `README.md`
 - `qt.conf`
-
-`build_info.txt` and the `Languages/` folder are not needed for the PrimeGun release build.
+- `Qt6Core.dll`
+- `Qt6Gui.dll`
+- `Qt6Svg.dll`
+- `Qt6Widgets.dll`
 
 ## Features
 
