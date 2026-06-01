@@ -1,0 +1,403 @@
+
+  // Target GLSL 4.5.
+  #version 450 core
+
+  #extension GL_ARB_shading_language_include : enable
+
+  #define ATTRIBUTE_LOCATION(x) layout(location = x)
+  #define FRAGMENT_OUTPUT_LOCATION(x) layout(location = x)
+  #define FRAGMENT_OUTPUT_LOCATION_INDEXED(x, y) layout(location = x, index = y)
+  #define UBO_BINDING(packing, x) layout(packing, set = 0, binding = (x - 1))
+  #define SAMPLER_BINDING(x) layout(set = 1, binding = x)
+  #define TEXEL_BUFFER_BINDING(x) layout(set = 1, binding = (x + 8))
+  #define SSBO_BINDING(x) layout(std430, set = 2, binding = x)
+  #define INPUT_ATTACHMENT_BINDING(x, y, z) layout(set = x, binding = y, input_attachment_index = z)
+  #define VARYING_LOCATION(x) layout(location = x)
+  #define FORCE_EARLY_Z layout(early_fragment_tests) in
+
+  // Metal framebuffer fetch helpers.
+  #define FB_FETCH_VALUE subpassLoad(in_ocol0)
+
+  // hlsl to glsl function translation
+  #define API_VULKAN 1
+  #define float2 vec2
+  #define float3 vec3
+  #define float4 vec4
+  #define uint2 uvec2
+  #define uint3 uvec3
+  #define uint4 uvec4
+  #define int2 ivec2
+  #define int3 ivec3
+  #define int4 ivec4
+  #define frac fract
+  #define lerp mix
+
+  // These were changed in Vulkan
+  #define gl_VertexID gl_VertexIndex
+  #define gl_InstanceID gl_InstanceIndex
+
+  #extension GL_KHR_shader_subgroup_basic : enable
+  #extension GL_KHR_shader_subgroup_arithmetic : enable
+  #extension GL_KHR_shader_subgroup_ballot : enable
+  #extension GL_KHR_shader_subgroup_shuffle : enable
+
+  #define SUPPORTS_SUBGROUP_REDUCTION 1
+  #define IS_HELPER_INVOCATION gl_HelperInvocation
+  #define IS_FIRST_ACTIVE_INVOCATION (subgroupElect())
+  #define SUBGROUP_MIN(value) value = subgroupMin(value)
+  #define SUBGROUP_MAX(value) value = subgroupMax(value)
+struct Light {
+	int4 color;
+	float4 cosatt;
+	float4 distatt;
+	float4 pos;
+	float4 dir;
+};
+UBO_BINDING(std140, 2) uniform VSBlock {
+	uint    components;
+	uint    xfmem_dualTexInfo;
+	uint    xfmem_numColorChans;
+	uint    missing_color_hex;
+	float4  missing_color_value;
+	float4 cpnmtx[6];
+	float4 cproj[4];
+	int4 cmtrl[4];
+	Light clights[8];
+	float4 ctexmtx[24];
+	float4 ctrmtx[64];
+	float4 cnmtx[32];
+	float4 cpostmtx[64];
+	float4 cpixelcenter;
+	float2 cviewport;
+	uint4   xfmem_pack1[8];
+	float4 cnormal;
+	float4 ctangent;
+	float4 cbinormal;
+	uint vertex_stride;
+	uint vertex_offset_rawnormal;
+	uint vertex_offset_rawtangent;
+	uint vertex_offset_rawbinormal;
+	uint vertex_offset_rawpos;
+	uint vertex_offset_posmtx;
+	uint vertex_offset_rawcolor0;
+	uint vertex_offset_rawcolor1;
+	uint4 vertex_offset_rawtex[2];
+	#define xfmem_texMtxInfo(i) (xfmem_pack1[(i)].x)
+	#define xfmem_postMtxInfo(i) (xfmem_pack1[(i)].y)
+	#define xfmem_color(i) (xfmem_pack1[(i)].z)
+	#define xfmem_alpha(i) (xfmem_pack1[(i)].w)
+};
+struct VS_OUTPUT {
+	 float4 pos;
+	 float4 colors_0;
+	 float4 colors_1;
+	 float3 tex0;
+	 float3 tex1;
+	 float3 tex2;
+	 float3 tex3;
+	 float4 viewPos;
+};
+
+#define dolphin_isnan(f) isnan(f)
+vec4 dolphin_calculate_lighting_chn0(vec4 base_color, vec3 pos, vec3 _normal)
+{
+	int4 lacc;
+	vec3 ldir, h, cosAttn, distAttn;
+	float dist, dist2, attn;
+	int4 mat = cmtrl[2];
+	lacc = cmtrl[0];
+	mat.w = int(round(base_color.w * 255.0));
+	lacc.w = 255;
+ldir = clights[0].pos.xyz - pos.xyz;
+dist2 = dot(ldir, ldir);
+dist = sqrt(dist2);
+ldir = ldir / dist;
+attn = max(0.0, dot(ldir, clights[0].dir.xyz));
+attn = max(0.0, clights[0].cosatt.x + clights[0].cosatt.y*attn + clights[0].cosatt.z*attn*attn) / dot(clights[0].distatt.xyz, float3(1.0,dist,dist2));
+lacc.rgb += int3(round(attn * max(0.0,dot(ldir, _normal)) * float3(clights[0].color.rgb)));
+
+ldir = clights[1].pos.xyz - pos.xyz;
+dist2 = dot(ldir, ldir);
+dist = sqrt(dist2);
+ldir = ldir / dist;
+attn = max(0.0, dot(ldir, clights[1].dir.xyz));
+attn = max(0.0, clights[1].cosatt.x + clights[1].cosatt.y*attn + clights[1].cosatt.z*attn*attn) / dot(clights[1].distatt.xyz, float3(1.0,dist,dist2));
+lacc.rgb += int3(round(attn * max(0.0,dot(ldir, _normal)) * float3(clights[1].color.rgb)));
+
+ldir = clights[2].pos.xyz - pos.xyz;
+dist2 = dot(ldir, ldir);
+dist = sqrt(dist2);
+ldir = ldir / dist;
+attn = max(0.0, dot(ldir, clights[2].dir.xyz));
+attn = max(0.0, clights[2].cosatt.x + clights[2].cosatt.y*attn + clights[2].cosatt.z*attn*attn) / dot(clights[2].distatt.xyz, float3(1.0,dist,dist2));
+lacc.rgb += int3(round(attn * max(0.0,dot(ldir, _normal)) * float3(clights[2].color.rgb)));
+
+	lacc = clamp(lacc, 0, 255);
+	return vec4((mat * (lacc + (lacc >> 7))) >> 8) / 255.0;
+}
+
+vec4 dolphin_calculate_lighting_chn1(vec4 base_color, vec3 pos, vec3 _normal)
+{
+	int4 lacc;
+	vec3 ldir, h, cosAttn, distAttn;
+	float dist, dist2, attn;
+	int4 mat = cmtrl[3];
+	lacc = int4(255, 255, 255, 255);
+	mat.w = int(round(base_color.w * 255.0));
+	lacc.w = 255;
+	lacc = clamp(lacc, 0, 255);
+	return vec4((mat * (lacc + (lacc >> 7))) >> 8) / 255.0;
+}
+
+ATTRIBUTE_LOCATION(0x0u /* Position */) in float4 rawpos;
+ATTRIBUTE_LOCATION(0x2u /* Normal */) in float3 rawnormal;
+ATTRIBUTE_LOCATION(0x8u /* Tex Coord 0 */) in float2 rawtex0;
+ATTRIBUTE_LOCATION(0x9u /* Tex Coord 1 */) in float2 rawtex1;
+VARYING_LOCATION(0) out VertexData {
+	 float4 pos;
+	 float4 colors_0;
+	 float4 colors_1;
+	 float3 tex0;
+	 float3 tex1;
+	 float3 tex2;
+	 float3 tex3;
+	 float4 viewPos;
+} vs;
+mat3x4 dolphin_position_matrix()
+{
+	mat3x4 result;
+	result[0] = cpnmtx[0];
+	result[1] = cpnmtx[1];
+	result[2] = cpnmtx[2];
+	return result;
+}
+
+mat3 dolphin_normal_matrix()
+{
+	mat3 result;
+	result[0] = cpnmtx[3].xyz;
+	result[1] = cpnmtx[4].xyz;
+	result[2] = cpnmtx[5].xyz;
+	return result;
+}
+
+vec3 dolphin_transform_texcoord0(vec4 coord)
+{
+	vec3 result;
+	result = vec3(dot(coord, ctexmtx[0]), dot(coord, ctexmtx[1]), dot(coord, ctexmtx[2]));
+	vec4 P0 = cpostmtx[61];
+	vec4 P1 = cpostmtx[62];
+	vec4 P2 = cpostmtx[63];
+	result = vec3(dot(P0.xyz, result) + P0.w, dot(P1.xyz, result) + P1.w, dot(P2.xyz, result) + P2.w);
+	if(result.z == 0.0f)
+		result.xy = clamp(result.xy / 2.0f, vec2(-1.0f,-1.0f), vec2(1.0f,1.0f));
+	return result;
+}
+
+vec3 dolphin_transform_texcoord1(vec4 coord)
+{
+	vec3 result;
+	result = vec3(dot(coord, ctexmtx[3]), dot(coord, ctexmtx[4]), dot(coord, ctexmtx[5]));
+	vec4 P0 = cpostmtx[0];
+	vec4 P1 = cpostmtx[1];
+	vec4 P2 = cpostmtx[2];
+	result = normalize(result);
+	result = vec3(dot(P0.xyz, result) + P0.w, dot(P1.xyz, result) + P1.w, dot(P2.xyz, result) + P2.w);
+	if(result.z == 0.0f)
+		result.xy = clamp(result.xy / 2.0f, vec2(-1.0f,-1.0f), vec2(1.0f,1.0f));
+	return result;
+}
+
+vec3 dolphin_transform_texcoord2(vec4 coord)
+{
+	vec3 result;
+	result = vec3(dot(coord, ctexmtx[6]), dot(coord, ctexmtx[7]), dot(coord, ctexmtx[8]));
+	vec4 P0 = cpostmtx[3];
+	vec4 P1 = cpostmtx[4];
+	vec4 P2 = cpostmtx[5];
+	result = normalize(result);
+	result = vec3(dot(P0.xyz, result) + P0.w, dot(P1.xyz, result) + P1.w, dot(P2.xyz, result) + P2.w);
+	if(result.z == 0.0f)
+		result.xy = clamp(result.xy / 2.0f, vec2(-1.0f,-1.0f), vec2(1.0f,1.0f));
+	return result;
+}
+
+vec3 dolphin_transform_texcoord3(vec4 coord)
+{
+	vec3 result;
+	result = vec3(dot(coord, ctexmtx[9]), dot(coord, ctexmtx[10]), dot(coord, ctexmtx[11]));
+	vec4 P0 = cpostmtx[61];
+	vec4 P1 = cpostmtx[62];
+	vec4 P2 = cpostmtx[63];
+	result = vec3(dot(P0.xyz, result) + P0.w, dot(P1.xyz, result) + P1.w, dot(P2.xyz, result) + P2.w);
+	if(result.z == 0.0f)
+		result.xy = clamp(result.xy / 2.0f, vec2(-1.0f,-1.0f), vec2(1.0f,1.0f));
+	return result;
+}
+
+#define HAS_COLOR_0 0
+#define HAS_COLOR_1 0
+#define HAS_NORMAL 1
+#define HAS_BINORMAL 0
+#define HAS_TANGENT 0
+#define HAS_TEXTURE_COORD_0 1
+#define HAS_TEXTURE_COORD_1 1
+#define HAS_TEXTURE_COORD_2 0
+#define HAS_TEXTURE_COORD_3 0
+#define HAS_TEXTURE_COORD_4 0
+#define HAS_TEXTURE_COORD_5 0
+#define HAS_TEXTURE_COORD_6 0
+#define HAS_TEXTURE_COORD_7 0
+struct DolphinVertexInput
+{
+	vec4 color_0;
+	vec4 color_1;
+	vec4 position;
+	vec3 normal;
+	vec3 binormal;
+	vec3 tangent;
+	vec4 texture_coord_0;
+	vec4 texture_coord_1;
+	vec4 texture_coord_2;
+	vec4 texture_coord_3;
+	vec4 texture_coord_4;
+	vec4 texture_coord_5;
+	vec4 texture_coord_6;
+	vec4 texture_coord_7;
+};
+
+struct DolphinVertexOutput
+{
+	vec4 color_0;
+	vec4 color_1;
+	vec4 position;
+	vec3 normal;
+	vec3 texture_coord_0;
+	vec3 texture_coord_1;
+	vec3 texture_coord_2;
+	vec3 texture_coord_3;
+	vec3 texture_coord_4;
+	vec3 texture_coord_5;
+	vec3 texture_coord_6;
+	vec3 texture_coord_7;
+};
+
+void dolphin_process_emulated_vertex(in DolphinVertexInput vertex_input, out DolphinVertexOutput vertex_output)
+{
+	vertex_output.position = vec4(vertex_input.position * dolphin_position_matrix(), 1.0);
+	vertex_output.normal = normalize(vertex_input.normal * dolphin_normal_matrix());
+	vec4 vertex_lighting_0 = dolphin_calculate_lighting_chn0(vertex_input.color_0, vertex_output.position.xyz, vertex_output.normal);
+	vertex_output.color_0 = vertex_lighting_0;
+	vec4 vertex_lighting_1 = dolphin_calculate_lighting_chn1(vertex_input.color_1, vertex_output.position.xyz, vertex_output.normal);
+	vertex_output.color_1 = vertex_lighting_1;
+	vertex_output.color_1 = vec4(0.0, 0.0, 0.0, 0.0);
+	vertex_output.texture_coord_0 = dolphin_transform_texcoord0(vertex_input.texture_coord_0);
+	vertex_output.texture_coord_1 = dolphin_transform_texcoord1(vertex_input.texture_coord_1);
+	vertex_output.texture_coord_2 = dolphin_transform_texcoord2(vertex_input.texture_coord_2);
+	vertex_output.texture_coord_3 = dolphin_transform_texcoord3(vertex_input.texture_coord_3);
+	vertex_output.texture_coord_4 = vec3(0, 0, 0);
+	vertex_output.texture_coord_5 = vec3(0, 0, 0);
+	vertex_output.texture_coord_6 = vec3(0, 0, 0);
+	vertex_output.texture_coord_7 = vec3(0, 0, 0);
+}
+void process_vertex(in DolphinVertexInput vertex_input, out DolphinVertexOutput vertex_output)
+{
+	dolphin_process_emulated_vertex(vertex_input, vertex_output);
+}
+void main()
+{
+VS_OUTPUT o;
+float4 vertex_color_0, vertex_color_1;
+vertex_color_0 = missing_color_value;
+vertex_color_1 = missing_color_value;
+	DolphinVertexInput vertex_input;
+	vertex_input.color_0 = vertex_color_0;
+	vertex_input.color_1 = vertex_color_1;
+	vertex_input.position = rawpos;
+	vertex_input.normal = rawnormal;
+	vertex_input.binormal = cbinormal.xyz;
+	vertex_input.tangent = ctangent.xyz;
+	{
+		vec4 coord = vec4(0.0, 0.0, 1.0, 1.0);
+		coord = vec4(rawtex0.x, rawtex0.y, 1.0, 1.0);
+		coord.z = 1.0;
+		// Convert NaN to 1
+		if (dolphin_isnan(coord.x)) coord.x = 1.0;
+		if (dolphin_isnan(coord.y)) coord.y = 1.0;
+		if (dolphin_isnan(coord.z)) coord.z = 1.0;
+		vertex_input.texture_coord_0 = coord;
+	}
+	{
+		vec4 coord = vec4(0.0, 0.0, 1.0, 1.0);
+		coord.xyz = rawnormal.xyz;
+		// Convert NaN to 1
+		if (dolphin_isnan(coord.x)) coord.x = 1.0;
+		if (dolphin_isnan(coord.y)) coord.y = 1.0;
+		if (dolphin_isnan(coord.z)) coord.z = 1.0;
+		vertex_input.texture_coord_1 = coord;
+	}
+	{
+		vec4 coord = vec4(0.0, 0.0, 1.0, 1.0);
+		coord.xyz = rawnormal.xyz;
+		// Convert NaN to 1
+		if (dolphin_isnan(coord.x)) coord.x = 1.0;
+		if (dolphin_isnan(coord.y)) coord.y = 1.0;
+		if (dolphin_isnan(coord.z)) coord.z = 1.0;
+		vertex_input.texture_coord_2 = coord;
+	}
+	{
+		vec4 coord = vec4(0.0, 0.0, 1.0, 1.0);
+		coord = vec4(rawtex1.x, rawtex1.y, 1.0, 1.0);
+		coord.z = 1.0;
+		// Convert NaN to 1
+		if (dolphin_isnan(coord.x)) coord.x = 1.0;
+		if (dolphin_isnan(coord.y)) coord.y = 1.0;
+		if (dolphin_isnan(coord.z)) coord.z = 1.0;
+		vertex_input.texture_coord_3 = coord;
+	}
+	vertex_input.texture_coord_4 = vec4(0, 0, 0, 0);
+	vertex_input.texture_coord_5 = vec4(0, 0, 0, 0);
+	vertex_input.texture_coord_6 = vec4(0, 0, 0, 0);
+	vertex_input.texture_coord_7 = vec4(0, 0, 0, 0);
+	DolphinVertexOutput vertex_output;
+	process_vertex(vertex_input, vertex_output);
+	o.pos = vec4(dot(cproj[0], vertex_output.position), dot(cproj[1], vertex_output.position), dot(cproj[2], vertex_output.position), dot(cproj[3], vertex_output.position));
+	o.tex0 = vertex_output.texture_coord_0;
+	o.tex1 = vertex_output.texture_coord_1;
+	o.tex2 = vertex_output.texture_coord_2;
+	o.tex3 = vertex_output.texture_coord_3;
+	o.colors_0 = vertex_output.color_0;
+	o.colors_1 = vertex_output.color_1;
+	o.viewPos = vertex_output.position;
+float clipDepth = o.pos.z * (1.0 - 1e-7);
+float clipDist0 = clipDepth + o.pos.w;
+float clipDist1 = -clipDepth;
+o.clipDist0 = clipDist0;
+o.clipDist1 = clipDist1;
+o.pos.z = o.pos.w * cpixelcenter.w - o.pos.z * cpixelcenter.z;
+o.pos.xy *= sign(cpixelcenter.xy * float2(1.0, -1.0));
+o.pos.xy = o.pos.xy - o.pos.w * cpixelcenter.xy;
+	vs.pos = o.pos;
+	vs.colors_0 = o.colors_0;
+	vs.colors_1 = o.colors_1;
+	vs.tex0 = o.tex0;
+	vs.tex1 = o.tex1;
+	vs.tex2 = o.tex2;
+	vs.tex3 = o.tex3;
+	vs.viewPos = o.viewPos;
+gl_ClipDistance[0] = clipDist0;
+gl_ClipDistance[1] = clipDist1;
+gl_Position = float4(o.pos.x, -o.pos.y, o.pos.z, o.pos.w);
+}
+
+Failed to parse shader
+Shader Info Log:
+ERROR: 0:375: 'clipDist0' : no such field in structure 'o'
+ERROR: 0:375: '' : compilation terminated 
+ERROR: 2 compilation errors.  No code generated.
+
+
+
+
+Dolphin Version: Dolphin 49bcd8cd25
+Video Backend: Vulkan

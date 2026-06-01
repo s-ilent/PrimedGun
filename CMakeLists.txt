@@ -873,6 +873,12 @@ add_subdirectory(Source)
 #
 if(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin|Windows")
   install(DIRECTORY Data/Sys/ DESTINATION ${datadir}/sys PATTERN)
+  install(CODE
+    "execute_process(COMMAND \"${CMAKE_COMMAND}\"
+      -DPRIMEGUN_USER_DEFAULTS_SOURCE=\"${CMAKE_SOURCE_DIR}/Data/User\"
+      -DPRIMEGUN_USER_DEFAULTS_DEST=\"\$ENV{DESTDIR}${datadir}/User\"
+      -P \"${CMAKE_SOURCE_DIR}/CMake/PrimeGunSeedUserDefaults.cmake\")"
+  )
 endif()
 if(NOT CMAKE_SYSTEM_NAME MATCHES "Linux|FreeBSD|OpenBSD|Darwin")
   install(FILES COPYING DESTINATION ${datadir})

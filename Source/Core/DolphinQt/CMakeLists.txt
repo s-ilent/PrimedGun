@@ -593,6 +593,17 @@ if(WIN32)
   endif()
 endif()
 
+file(GLOB_RECURSE primegun_user_default_files CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/Data/User/*")
+add_custom_target(primegun-user-defaults-copy
+  COMMAND ${CMAKE_COMMAND}
+    -DPRIMEGUN_USER_DEFAULTS_SOURCE="${CMAKE_SOURCE_DIR}/Data/User"
+    -DPRIMEGUN_USER_DEFAULTS_DEST="$<TARGET_FILE_DIR:dolphin-emu>/User"
+    -P "${CMAKE_SOURCE_DIR}/CMake/PrimeGunSeedUserDefaults.cmake"
+  DEPENDS ${primegun_user_default_files}
+  COMMENT "Seeding missing Data/User defaults into the runtime User directory"
+)
+add_dependencies(dolphin-emu primegun-user-defaults-copy)
+
 # Handle localization
 if(PRIMEGUN_ENABLE_TRANSLATIONS)
 find_package(Gettext)

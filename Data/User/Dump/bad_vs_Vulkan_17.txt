@@ -1,0 +1,745 @@
+
+  // Target GLSL 4.5.
+  #version 450 core
+
+  #extension GL_ARB_shading_language_include : enable
+
+  #define ATTRIBUTE_LOCATION(x) layout(location = x)
+  #define FRAGMENT_OUTPUT_LOCATION(x) layout(location = x)
+  #define FRAGMENT_OUTPUT_LOCATION_INDEXED(x, y) layout(location = x, index = y)
+  #define UBO_BINDING(packing, x) layout(packing, set = 0, binding = (x - 1))
+  #define SAMPLER_BINDING(x) layout(set = 1, binding = x)
+  #define TEXEL_BUFFER_BINDING(x) layout(set = 1, binding = (x + 8))
+  #define SSBO_BINDING(x) layout(std430, set = 2, binding = x)
+  #define INPUT_ATTACHMENT_BINDING(x, y, z) layout(set = x, binding = y, input_attachment_index = z)
+  #define VARYING_LOCATION(x) layout(location = x)
+  #define FORCE_EARLY_Z layout(early_fragment_tests) in
+
+  // Metal framebuffer fetch helpers.
+  #define FB_FETCH_VALUE subpassLoad(in_ocol0)
+
+  // hlsl to glsl function translation
+  #define API_VULKAN 1
+  #define float2 vec2
+  #define float3 vec3
+  #define float4 vec4
+  #define uint2 uvec2
+  #define uint3 uvec3
+  #define uint4 uvec4
+  #define int2 ivec2
+  #define int3 ivec3
+  #define int4 ivec4
+  #define frac fract
+  #define lerp mix
+
+  // These were changed in Vulkan
+  #define gl_VertexID gl_VertexIndex
+  #define gl_InstanceID gl_InstanceIndex
+
+  #extension GL_KHR_shader_subgroup_basic : enable
+  #extension GL_KHR_shader_subgroup_arithmetic : enable
+  #extension GL_KHR_shader_subgroup_ballot : enable
+  #extension GL_KHR_shader_subgroup_shuffle : enable
+
+  #define SUPPORTS_SUBGROUP_REDUCTION 1
+  #define IS_HELPER_INVOCATION gl_HelperInvocation
+  #define IS_FIRST_ACTIVE_INVOCATION (subgroupElect())
+  #define SUBGROUP_MIN(value) value = subgroupMin(value)
+  #define SUBGROUP_MAX(value) value = subgroupMax(value)
+// Vertex UberShader for 7 texgens
+
+struct Light {
+	int4 color;
+	float4 cosatt;
+	float4 distatt;
+	float4 pos;
+	float4 dir;
+};
+UBO_BINDING(std140, 2) uniform VSBlock {
+	uint    components;
+	uint    xfmem_dualTexInfo;
+	uint    xfmem_numColorChans;
+	uint    missing_color_hex;
+	float4  missing_color_value;
+	float4 cpnmtx[6];
+	float4 cproj[4];
+	int4 cmtrl[4];
+	Light clights[8];
+	float4 ctexmtx[24];
+	float4 ctrmtx[64];
+	float4 cnmtx[32];
+	float4 cpostmtx[64];
+	float4 cpixelcenter;
+	float2 cviewport;
+	uint4   xfmem_pack1[8];
+	float4 cnormal;
+	float4 ctangent;
+	float4 cbinormal;
+	uint vertex_stride;
+	uint vertex_offset_rawnormal;
+	uint vertex_offset_rawtangent;
+	uint vertex_offset_rawbinormal;
+	uint vertex_offset_rawpos;
+	uint vertex_offset_posmtx;
+	uint vertex_offset_rawcolor0;
+	uint vertex_offset_rawcolor1;
+	uint4 vertex_offset_rawtex[2];
+	#define xfmem_texMtxInfo(i) (xfmem_pack1[(i)].x)
+	#define xfmem_postMtxInfo(i) (xfmem_pack1[(i)].y)
+	#define xfmem_color(i) (xfmem_pack1[(i)].z)
+	#define xfmem_alpha(i) (xfmem_pack1[(i)].w)
+};
+UBO_BINDING(std140, 4) uniform GSBlock {
+	float4 cstereo;
+	float4 clinept;
+	int4 ctexoffset;
+	uint vs_expand;
+	float4 ceye_proj[4];
+	float4 clegacy_eye_proj_x[2];
+	float4 clegacy_eye_proj_y[2];
+	float4 clegacy_center_proj[2];
+	float4 cvr_eye_z[2];
+	float4 cvr_depth;
+	float4 cvr_screen;
+	float4 cvr_head_proj[4];
+	float4 cvr_head_params;
+	float4 cvr_pixelcenter;
+};
+struct VS_OUTPUT {
+	 float4 pos;
+	 float4 colors_0;
+	 float4 colors_1;
+	 float3 tex0;
+	 float3 tex1;
+	 float3 tex2;
+	 float3 tex3;
+	 float3 tex4;
+	 float3 tex5;
+	 float3 tex6;
+	 float4 viewPos;
+};
+
+#define dolphin_isnan(f) isnan(f)
+int4 CalculateLighting(uint index, uint attnfunc, uint diffusefunc, float3 pos, float3 normal) {
+  float3 ldir, h, cosAttn, distAttn;
+  float dist, dist2, attn;
+
+  switch (attnfunc) {
+  case 0x0u /* No attenuation */:
+  case 0x2u /* Directional light attenuation */:
+    ldir = normalize(clights[index].pos.xyz - pos.xyz);
+    attn = 1.0;
+    if (length(ldir) == 0.0)
+      ldir = normal;
+    break;
+
+  case 0x1u /* Point light attenuation */:
+    ldir = normalize(clights[index].pos.xyz - pos.xyz);
+    attn = (dot(normal, ldir) >= 0.0) ? max(0.0, dot(normal, clights[index].dir.xyz)) : 0.0;
+    cosAttn = clights[index].cosatt.xyz;
+    if (diffusefunc == 0x0u /* None */)
+      distAttn = clights[index].distatt.xyz;
+    else
+      distAttn = normalize(clights[index].distatt.xyz);
+    attn = max(0.0, dot(cosAttn, float3(1.0, attn, attn*attn))) / dot(distAttn, float3(1.0, attn, attn*attn));
+    break;
+
+  case 0x3u /* Spot light attenuation */:
+    ldir = clights[index].pos.xyz - pos.xyz;
+    dist2 = dot(ldir, ldir);
+    dist = sqrt(dist2);
+    ldir = ldir / dist;
+    attn = max(0.0, dot(ldir, clights[index].dir.xyz));
+    attn = max(0.0, clights[index].cosatt.x + clights[index].cosatt.y * attn + clights[index].cosatt.z * attn * attn) / dot(clights[index].distatt.xyz, float3(1.0, dist, dist2));
+    break;
+
+  default:
+    attn = 1.0;
+    ldir = normal;
+    break;
+  }
+
+  switch (diffusefunc) {
+  case 0x0u /* None */:
+    return int4(round(attn * float4(clights[index].color)));
+
+  case 0x1u /* Sign */:
+    return int4(round(attn * dot(ldir, normal) * float4(clights[index].color)));
+
+  case 0x2u /* Clamp */:
+    return int4(round(attn * max(0.0, dot(ldir, normal)) * float4(clights[index].color)));
+
+  default:
+    return int4(0, 0, 0, 0);
+  }
+}
+
+
+SSBO_BINDING(1) readonly restrict buffer Vertices {
+  uint vertex_buffer[];
+};
+uint GetVertexBaseOffset(uint vertex_id) {
+  return vertex_id * vertex_stride;
+}
+
+uint4 load_input_uint4_ubyte4(uint vtx_offset, uint attr_offset) {
+  uint value = vertex_buffer[vtx_offset + attr_offset];
+  return uint4(value & 0xffu, (value >> 8) & 0xffu, (value >> 16) & 0xffu, value >> 24);
+}
+
+float4 load_input_float4_ubyte4(uint vtx_offset, uint attr_offset) {
+  return float4(load_input_uint4_ubyte4(vtx_offset, attr_offset)) / 255.0f;
+}
+
+float3 load_input_float3_float3(uint vtx_offset, uint attr_offset) {
+  uint offset = vtx_offset + attr_offset;
+  return float3(uintBitsToFloat(vertex_buffer[offset + 0]),
+                uintBitsToFloat(vertex_buffer[offset + 1]),
+                uintBitsToFloat(vertex_buffer[offset + 2]));
+}
+
+float4 load_input_float4_rawpos(uint vtx_offset, uint attr_offset) {
+  uint components = attr_offset >> 16;
+  uint offset = vtx_offset + (attr_offset & 0xffff);
+  if (components < 3)
+    return float4(uintBitsToFloat(vertex_buffer[offset + 0]),
+                  uintBitsToFloat(vertex_buffer[offset + 1]),
+                  0.0f, 1.0f);
+  else
+    return float4(uintBitsToFloat(vertex_buffer[offset + 0]),
+                  uintBitsToFloat(vertex_buffer[offset + 1]),
+                  uintBitsToFloat(vertex_buffer[offset + 2]),
+                  1.0f);
+}
+
+float3 load_input_float3_rawtex(uint vtx_offset, uint attr_offset) {
+  uint components = attr_offset >> 16;
+  uint offset = vtx_offset + (attr_offset & 0xffff);
+  if (components < 2)
+    return float3(uintBitsToFloat(vertex_buffer[offset + 0]), 0.0f, 0.0f);
+  else if (components < 3)
+    return float3(uintBitsToFloat(vertex_buffer[offset + 0]),
+                  uintBitsToFloat(vertex_buffer[offset + 1]),
+                  0.0f);
+  else
+    return float3(uintBitsToFloat(vertex_buffer[offset + 0]),
+                  uintBitsToFloat(vertex_buffer[offset + 1]),
+                  uintBitsToFloat(vertex_buffer[offset + 2]));
+}
+
+VARYING_LOCATION(0) out VertexData {
+	 float4 pos;
+	 float4 colors_0;
+	 float4 colors_1;
+	 float3 tex0;
+	 float3 tex1;
+	 float3 tex2;
+	 float3 tex3;
+	 float3 tex4;
+	 float3 tex5;
+	 float3 tex6;
+	 float4 viewPos;
+} vs;
+void main()
+{
+VS_OUTPUT o;
+
+uint vertex_id = gl_VertexID;
+if (vs_expand != 0u) {
+  vertex_id = vertex_id >> 2;
+}
+uint vertex_base_offset = GetVertexBaseOffset(vertex_id);
+float4 rawpos = load_input_float4_rawpos(vertex_base_offset, vertex_offset_rawpos);
+// Position matrix
+float4 P0;
+float4 P1;
+float4 P2;
+
+// Normal matrix
+float3 N0;
+float3 N1;
+float3 N2;
+
+if ((components & 2u) != 0u) { // VB_HAS_POSMTXIDX
+  uint4 posmtx = load_input_uint4_ubyte4(vertex_base_offset, vertex_offset_posmtx);
+  // Vertex format has a per-vertex matrix
+  int posidx = int(posmtx.r);
+  P0 = ctrmtx[posidx];
+  P1 = ctrmtx[posidx+1];
+  P2 = ctrmtx[posidx+2];
+
+  int normidx = posidx >= 32 ? (posidx - 32) : posidx;
+  N0 = cnmtx[normidx].xyz;
+  N1 = cnmtx[normidx+1].xyz;
+  N2 = cnmtx[normidx+2].xyz;
+} else {
+  // One shared matrix
+  P0 = cpnmtx[0];
+  P1 = cpnmtx[1];
+  P2 = cpnmtx[2];
+  N0 = cpnmtx[3].xyz;
+  N1 = cpnmtx[4].xyz;
+  N2 = cpnmtx[5].xyz;
+}
+
+// Multiply the position vector by the position matrix
+float4 pos = float4(dot(P0, rawpos), dot(P1, rawpos), dot(P2, rawpos), 1.0);
+o.pos = float4(dot(cproj[0], pos), dot(cproj[1], pos), dot(cproj[2], pos), dot(cproj[3], pos));
+
+float3 _rawnormal;
+float3 _rawtangent;
+float3 _rawbinormal;
+if ((components & 1024u) != 0u) // VB_HAS_NORMAL
+{
+  float3 rawnormal = load_input_float3_float3(vertex_base_offset, vertex_offset_rawnormal);
+  _rawnormal = rawnormal;
+}
+else
+{
+  _rawnormal = cnormal.xyz;
+}
+
+if ((components & 2048u) != 0u) // VB_HAS_TANGENT
+{
+  float3 rawtangent = load_input_float3_float3(vertex_base_offset, vertex_offset_rawtangent);
+  _rawtangent = rawtangent;
+}
+else
+{
+  _rawtangent = ctangent.xyz;
+}
+
+if ((components & 4096u) != 0u) // VB_HAS_BINORMAL
+{
+  float3 rawbinormal = load_input_float3_float3(vertex_base_offset, vertex_offset_rawbinormal);
+  _rawbinormal = rawbinormal;
+}
+else
+{
+  _rawbinormal = cbinormal.xyz;
+}
+
+// The scale of the transform matrix is used to control the size of the emboss map
+// effect by changing the scale of the transformed binormals (which only get used by
+// emboss map texgens). By normalising the first transformed normal (which is used
+// by lighting calculations and needs to be unit length), the same transform matrix
+// can do double duty, scaling for emboss mapping, and not scaling for lighting.
+float3 _normal = normalize(float3(dot(N0, _rawnormal), dot(N1, _rawnormal), dot(N2, _rawnormal)));
+float3 _tangent = float3(dot(N0, _rawtangent), dot(N1, _rawtangent), dot(N2, _rawtangent));
+float3 _binormal = float3(dot(N0, _rawbinormal), dot(N1, _rawbinormal), dot(N2, _rawbinormal));
+// xfmem.numColorChans controls the number of color channels available to TEV,
+// but we still need to generate all channels here, as it can be used in texgen.
+// Cel-damage is an example of this.
+float4 vertex_color_0, vertex_color_1;
+
+// To use color 1, the vertex descriptor must have color 0 and 1.
+// If color 1 is present but not color 0, it is used for lighting channel 0.
+bool use_color_1 = ((components & 24576u) == 24576u); // VB_HAS_COL0 | VB_HAS_COL1
+if ((components & 24576u) == 24576u) // VB_HAS_COL0 | VB_HAS_COL1
+{
+  float4 rawcolor0 = load_input_float4_ubyte4(vertex_base_offset, vertex_offset_rawcolor0);
+  float4 rawcolor1 = load_input_float4_ubyte4(vertex_base_offset, vertex_offset_rawcolor1);
+  vertex_color_0 = rawcolor0;
+  vertex_color_1 = rawcolor1;
+}
+else if ((components & 8192u) != 0u) // VB_HAS_COL0
+{
+  float4 rawcolor0 = load_input_float4_ubyte4(vertex_base_offset, vertex_offset_rawcolor0);
+  vertex_color_0 = rawcolor0;
+  vertex_color_1 = rawcolor0;
+}
+else if ((components & 16384u) != 0u) // VB_HAS_COL1
+{
+  float4 rawcolor1 = load_input_float4_ubyte4(vertex_base_offset, vertex_offset_rawcolor1);
+  vertex_color_0 = rawcolor1;
+  vertex_color_1 = rawcolor1;
+}
+else
+{
+  vertex_color_0 = missing_color_value;
+  vertex_color_1 = missing_color_value;
+}
+// Lighting
+for (uint chan = 0u; chan < 2u; chan++) {
+  uint colorreg = xfmem_color(chan);
+  uint alphareg = xfmem_alpha(chan);
+  int4 mat = cmtrl[chan + 2u]; 
+  int4 lacc = int4(255, 255, 255, 255);
+
+  if (bitfieldExtract(uint(colorreg), 0, 1) != 0u)
+    mat.xyz = int3(round(((chan == 0u) ? vertex_color_0.xyz : vertex_color_1.xyz) * 255.0));
+  if (bitfieldExtract(uint(alphareg), 0, 1) != 0u)
+    mat.w = int(round(((chan == 0u) ? vertex_color_0.w : vertex_color_1.w) * 255.0));
+  else
+    mat.w = cmtrl [chan + 2u].w;
+
+  if (bitfieldExtract(uint(colorreg), 1, 1) != 0u) {
+    if (bitfieldExtract(uint(colorreg), 6, 1) != 0u)
+      lacc.xyz = int3(round(((chan == 0u) ? vertex_color_0.xyz : vertex_color_1.xyz) * 255.0));
+    else
+      lacc.xyz = cmtrl [chan].xyz;
+
+    uint light_mask = bitfieldExtract(uint(colorreg), 2, 4) | (bitfieldExtract(uint(colorreg), 11, 4) << 4u);
+    uint attnfunc = bitfieldExtract(uint(colorreg), 9, 2);
+    uint diffusefunc = bitfieldExtract(uint(colorreg), 7, 2);
+    for (uint light_index = 0u; light_index < 8u; light_index++) {
+      if ((light_mask & (1u << light_index)) != 0u)
+        lacc.xyz += CalculateLighting(light_index, attnfunc, diffusefunc, pos.xyz, _normal).xyz;
+    }
+  }
+
+  if (bitfieldExtract(uint(alphareg), 1, 1) != 0u) {
+    if (bitfieldExtract(uint(alphareg), 6, 1) != 0u) {
+      if ((components & (8192u << chan)) != 0u) // VB_HAS_COL0
+        lacc.w = int(round(((chan == 0u) ? vertex_color_0.w : vertex_color_1.w) * 255.0));
+      else if ((components & 8192u) != 0u) // VB_HAS_COLO0
+        lacc.w = int(round(vertex_color_0.w * 255.0));
+      else
+        lacc.w = 255;
+    } else {
+      lacc.w = cmtrl [chan].w;
+    }
+
+    uint light_mask = bitfieldExtract(uint(alphareg), 2, 4) | (bitfieldExtract(uint(alphareg), 11, 4) << 4u);
+    uint attnfunc = bitfieldExtract(uint(alphareg), 9, 2);
+    uint diffusefunc = bitfieldExtract(uint(alphareg), 7, 2);
+    for (uint light_index = 0u; light_index < 8u; light_index++) {
+
+      if ((light_mask & (1u << light_index)) != 0u)
+
+        lacc.w += CalculateLighting(light_index, attnfunc, diffusefunc, pos.xyz, _normal).w;
+    }
+  }
+
+  lacc = clamp(lacc, 0, 255);
+
+  // Hopefully GPUs that can support dynamic indexing will optimize this.
+  float4 lit_color = float4((mat * (lacc + (lacc >> 7))) >> 8) / 255.0;
+  switch (chan) {
+  case 0u: o.colors_0 = lit_color; break;
+  case 1u: o.colors_1 = lit_color; break;
+  }
+}
+
+o.tex0 = float3(0.0, 0.0, 0.0);
+o.tex1 = float3(0.0, 0.0, 0.0);
+o.tex2 = float3(0.0, 0.0, 0.0);
+o.tex3 = float3(0.0, 0.0, 0.0);
+o.tex4 = float3(0.0, 0.0, 0.0);
+o.tex5 = float3(0.0, 0.0, 0.0);
+o.tex6 = float3(0.0, 0.0, 0.0);
+// Texture coordinate generation
+for (uint texgen = 0u; texgen < 7u; texgen++) {
+  // Texcoord transforms
+  float4 coord = float4(0.0, 0.0, 1.0, 1.0);
+  uint texMtxInfo = xfmem_texMtxInfo(texgen);
+  switch (bitfieldExtract(uint(texMtxInfo), 7, 5)) {
+  case 0x0u /* Geometry (input is ABC1) */:
+    coord.xyz = rawpos.xyz;
+    break;
+
+  case 0x1u /* Normal (input is ABC1) */:
+    if ((components & 1024u) != 0u) // VB_HAS_NORMAL
+    {
+      float3 rawnormal = load_input_float3_float3(vertex_base_offset, vertex_offset_rawnormal);
+      coord.xyz = rawnormal.xyz;
+    }
+    break;
+
+  case 0x3u /* Binormal T (input is ABC1) */:
+    if ((components & 2048u) != 0u) // VB_HAS_TANGENT
+    {
+      float3 rawtangent = load_input_float3_float3(vertex_base_offset, vertex_offset_rawtangent);
+      coord.xyz = rawtangent.xyz;
+    }
+    break;
+
+  case 0x4u /* Binormal B (input is ABC1) */:
+    if ((components & 4096u) != 0u) // VB_HAS_BINORMAL
+    {
+      float3 rawbinormal = load_input_float3_float3(vertex_base_offset, vertex_offset_rawbinormal);
+      coord.xyz = rawbinormal.xyz;
+    }
+    break;
+
+  case 0x5u /* Tex 0 */:
+    if ((components & 32768u) != 0u) // VB_HAS_UV0
+    {
+      float3 rawtex0 = load_input_float3_rawtex(vertex_base_offset, vertex_offset_rawtex[0][0]);
+      coord = float4(rawtex0.x, rawtex0.y, 1.0f, 1.0f);
+    }
+    break;
+
+  case 0x6u /* Tex 1 */:
+    if ((components & 65536u) != 0u) // VB_HAS_UV1
+    {
+      float3 rawtex1 = load_input_float3_rawtex(vertex_base_offset, vertex_offset_rawtex[0][1]);
+      coord = float4(rawtex1.x, rawtex1.y, 1.0f, 1.0f);
+    }
+    break;
+
+  case 0x7u /* Tex 2 */:
+    if ((components & 131072u) != 0u) // VB_HAS_UV2
+    {
+      float3 rawtex2 = load_input_float3_rawtex(vertex_base_offset, vertex_offset_rawtex[0][2]);
+      coord = float4(rawtex2.x, rawtex2.y, 1.0f, 1.0f);
+    }
+    break;
+
+  case 0x8u /* Tex 3 */:
+    if ((components & 262144u) != 0u) // VB_HAS_UV3
+    {
+      float3 rawtex3 = load_input_float3_rawtex(vertex_base_offset, vertex_offset_rawtex[0][3]);
+      coord = float4(rawtex3.x, rawtex3.y, 1.0f, 1.0f);
+    }
+    break;
+
+  case 0x9u /* Tex 4 */:
+    if ((components & 524288u) != 0u) // VB_HAS_UV4
+    {
+      float3 rawtex4 = load_input_float3_rawtex(vertex_base_offset, vertex_offset_rawtex[1][0]);
+      coord = float4(rawtex4.x, rawtex4.y, 1.0f, 1.0f);
+    }
+    break;
+
+  case 0xau /* Tex 5 */:
+    if ((components & 1048576u) != 0u) // VB_HAS_UV5
+    {
+      float3 rawtex5 = load_input_float3_rawtex(vertex_base_offset, vertex_offset_rawtex[1][1]);
+      coord = float4(rawtex5.x, rawtex5.y, 1.0f, 1.0f);
+    }
+    break;
+
+  case 0xbu /* Tex 6 */:
+    if ((components & 2097152u) != 0u) // VB_HAS_UV6
+    {
+      float3 rawtex6 = load_input_float3_rawtex(vertex_base_offset, vertex_offset_rawtex[1][2]);
+      coord = float4(rawtex6.x, rawtex6.y, 1.0f, 1.0f);
+    }
+    break;
+
+  case 0xcu /* Tex 7 */:
+    if ((components & 4194304u) != 0u) // VB_HAS_UV7
+    {
+      float3 rawtex7 = load_input_float3_rawtex(vertex_base_offset, vertex_offset_rawtex[1][3]);
+      coord = float4(rawtex7.x, rawtex7.y, 1.0f, 1.0f);
+    }
+    break;
+
+  }
+
+  // Input form of AB11 sets z element to 1.0
+  if (bitfieldExtract(uint(texMtxInfo), 2, 1) == 0x0u /* AB11 */) // inputform == AB11
+    coord.z = 1.0f;
+
+  // Convert NaN to 1
+  if (dolphin_isnan(coord.x)) coord.x = 1.0;
+  if (dolphin_isnan(coord.y)) coord.y = 1.0;
+  if (dolphin_isnan(coord.z)) coord.z = 1.0;
+  // first transformation
+  uint texgentype = bitfieldExtract(uint(texMtxInfo), 4, 3);
+  float3 output_tex;
+  switch (texgentype)
+  {
+  case 0x1u /* Emboss map (used when bump mapping) */:
+    {
+      uint light = bitfieldExtract(uint(texMtxInfo), 15, 3);
+      uint source = bitfieldExtract(uint(texMtxInfo), 12, 3);
+      switch (source) {
+      case 0u: output_tex.xyz = o.tex0; break;
+      case 1u: output_tex.xyz = o.tex1; break;
+      case 2u: output_tex.xyz = o.tex2; break;
+      case 3u: output_tex.xyz = o.tex3; break;
+      case 4u: output_tex.xyz = o.tex4; break;
+      case 5u: output_tex.xyz = o.tex5; break;
+      case 6u: output_tex.xyz = o.tex6; break;
+      default: output_tex.xyz = float3(0.0, 0.0, 0.0); break;
+      }
+      float3 ldir = normalize(clights[light].pos.xyz - pos.xyz);
+      output_tex.xyz += float3(dot(ldir, _tangent), dot(ldir, _binormal), 0.0);
+    }
+    break;
+
+  case 0x2u /* Color channel 0 */:
+    output_tex.xyz = float3(o.colors_0.x, o.colors_0.y, 1.0);
+    break;
+
+  case 0x3u /* Color channel 1 */:
+    output_tex.xyz = float3(o.colors_1.x, o.colors_1.y, 1.0);
+    break;
+
+  case 0x0u /* Regular */:
+  default:
+    {
+      if ((components & (4u /* VB_HAS_TEXMTXIDX0 */ << texgen)) != 0u) {
+        int tmp = int(load_input_float3_rawtex(vertex_base_offset, vertex_offset_rawtex[texgen / 4][texgen % 4]).z);
+
+        if (bitfieldExtract(uint(texMtxInfo), 1, 1) == 0x1u /* STQ (3x4 matrix) */) {
+          output_tex.xyz = float3(dot(coord, ctrmtx[tmp]),
+                                  dot(coord, ctrmtx[tmp + 1]),
+                                  dot(coord, ctrmtx[tmp + 2]));
+        } else {
+          output_tex.xyz = float3(dot(coord, ctrmtx[tmp]),
+                                  dot(coord, ctrmtx[tmp + 1]),
+                                  1.0);
+        }
+      } else {
+        if (bitfieldExtract(uint(texMtxInfo), 1, 1) == 0x1u /* STQ (3x4 matrix) */) {
+          output_tex.xyz = float3(dot(coord, ctexmtx[3u * texgen]),
+                                  dot(coord, ctexmtx[3u * texgen + 1u]),
+                                  dot(coord, ctexmtx[3u * texgen + 2u]));
+        } else {
+          output_tex.xyz = float3(dot(coord, ctexmtx[3u * texgen]),
+                                  dot(coord, ctexmtx[3u * texgen + 1u]),
+                                  1.0);
+        }
+      }
+    }
+    break;
+
+  }
+
+  if (xfmem_dualTexInfo != 0u) {
+    uint postMtxInfo = xfmem_postMtxInfo(texgen);    uint base_index = bitfieldExtract(uint(postMtxInfo), 0, 6);
+    float4 P0 = cpostmtx[base_index & 0x3fu];
+    float4 P1 = cpostmtx[(base_index + 1u) & 0x3fu];
+    float4 P2 = cpostmtx[(base_index + 2u) & 0x3fu];
+
+    if (bitfieldExtract(uint(postMtxInfo), 8, 1) != 0u)
+      output_tex.xyz = normalize(output_tex.xyz);
+
+    // multiply by postmatrix
+    output_tex.xyz = float3(dot(P0.xyz, output_tex.xyz) + P0.w,
+                            dot(P1.xyz, output_tex.xyz) + P1.w,
+                            dot(P2.xyz, output_tex.xyz) + P2.w);
+  }
+
+  if (texgentype == 0x0u /* Regular */ && output_tex.z == 0.0)
+    output_tex.xy = clamp(output_tex.xy / 2.0f, float2(-1.0f,-1.0f), float2(1.0f,1.0f));
+
+  // Hopefully GPUs that can support dynamic indexing will optimize this.
+  switch (texgen) {
+  case 0u: o.tex0 = output_tex; break;
+  case 1u: o.tex1 = output_tex; break;
+  case 2u: o.tex2 = output_tex; break;
+  case 3u: o.tex3 = output_tex; break;
+  case 4u: o.tex4 = output_tex; break;
+  case 5u: o.tex5 = output_tex; break;
+  case 6u: o.tex6 = output_tex; break;
+  }
+}
+if (vs_expand == 2u) { // Line
+  bool is_bottom = (gl_VertexID & 2) != 0;
+  bool is_right = (gl_VertexID & 1) != 0;
+  uint other_base_offset = vertex_base_offset;
+  if (is_bottom) {
+    other_base_offset -= vertex_stride;
+  } else {
+    other_base_offset += vertex_stride;
+  }
+  float4 other_rawpos = load_input_float4_rawpos(other_base_offset, vertex_offset_rawpos);
+  float4 other_p0 = P0;
+  float4 other_p1 = P1;
+  float4 other_p2 = P2;
+  if ((components & 2u) != 0u) { // VB_HAS_POSMTXIDX
+    uint other_posidx = load_input_uint4_ubyte4(other_base_offset, vertex_offset_posmtx).r;
+    other_p0 = ctrmtx[other_posidx];
+    other_p1 = ctrmtx[other_posidx+1];
+    other_p2 = ctrmtx[other_posidx+2];
+  }
+  float4 other_pos = float4(dot(other_p0, other_rawpos), dot(other_p1, other_rawpos), dot(other_p2, other_rawpos), 1.0);
+  other_pos = float4(dot(cproj[0], other_pos), dot(cproj[1], other_pos), dot(cproj[2], other_pos), dot(cproj[3], other_pos));
+
+  float expand_sign = is_right ? 1.0f : -1.0f;
+  float2 offset;
+  float2 to = abs(o.pos.xy / o.pos.w - other_pos.xy / other_pos.w);
+  if (clinept.y * to.y > clinept.x * to.x) {
+    offset = float2(expand_sign * clinept.z / clinept.x, 0);
+  } else {
+    offset = float2(0, expand_sign * -clinept.z / clinept.y);
+  }
+
+  o.pos.xy += offset * o.pos.w;
+  if ((ctexoffset[2] != 0) && is_right) {
+    float texOffset = 1.0 / float(ctexoffset[2]);
+    if (((ctexoffset[0] >> 0) & 0x1) != 0)
+      o.tex0.x += texOffset;
+    if (((ctexoffset[0] >> 1) & 0x1) != 0)
+      o.tex1.x += texOffset;
+    if (((ctexoffset[0] >> 2) & 0x1) != 0)
+      o.tex2.x += texOffset;
+    if (((ctexoffset[0] >> 3) & 0x1) != 0)
+      o.tex3.x += texOffset;
+    if (((ctexoffset[0] >> 4) & 0x1) != 0)
+      o.tex4.x += texOffset;
+    if (((ctexoffset[0] >> 5) & 0x1) != 0)
+      o.tex5.x += texOffset;
+    if (((ctexoffset[0] >> 6) & 0x1) != 0)
+      o.tex6.x += texOffset;
+  }
+} else if (vs_expand == 1u) { // Point
+  bool is_bottom = (gl_VertexID & 2) != 0;
+  bool is_right = (gl_VertexID & 1) != 0;
+  float2 expand_sign = float2(is_right ? 1.0f : -1.0f, is_bottom ? -1.0f : 1.0f);
+  float2 offset = expand_sign * clinept.ww / clinept.xy;
+  o.pos.xy += offset * o.pos.w;
+  if (ctexoffset[3] != 0) {
+    float texOffsetMagnitude = 1.0f / float(ctexoffset[3]);
+    float2 texOffset = float2(is_right ? texOffsetMagnitude : 0.0f, is_bottom ? texOffsetMagnitude : 0.0f);    if (((ctexoffset[1] >> 0) & 0x1) != 0)
+      o.tex0.xy += texOffset;
+    if (((ctexoffset[1] >> 1) & 0x1) != 0)
+      o.tex1.xy += texOffset;
+    if (((ctexoffset[1] >> 2) & 0x1) != 0)
+      o.tex2.xy += texOffset;
+    if (((ctexoffset[1] >> 3) & 0x1) != 0)
+      o.tex3.xy += texOffset;
+    if (((ctexoffset[1] >> 4) & 0x1) != 0)
+      o.tex4.xy += texOffset;
+    if (((ctexoffset[1] >> 5) & 0x1) != 0)
+      o.tex5.xy += texOffset;
+    if (((ctexoffset[1] >> 6) & 0x1) != 0)
+      o.tex6.xy += texOffset;
+  }
+}
+// The number of colors available to TEV is determined by numColorChans.
+// We have to provide the fields to match the interface, so set to zero
+// if it's not enabled.
+if (xfmem_numColorChans == 0u)
+  o.colors_0 = float4(0.0, 0.0, 0.0, 0.0);
+if (xfmem_numColorChans <= 1u)
+  o.colors_1 = float4(0.0, 0.0, 0.0, 0.0);
+float clipDepth = o.pos.z * (1.0 - 1e-7);
+float clipDist0 = clipDepth + o.pos.w;
+float clipDist1 = -clipDepth;
+o.clipDist0 = clipDist0;
+o.clipDist1 = clipDist1;
+o.pos.z = o.pos.w * cpixelcenter.w - o.pos.z * cpixelcenter.z;
+o.pos.xy *= sign(cpixelcenter.xy * float2(1.0, -1.0));
+o.pos.xy = o.pos.xy - o.pos.w * cpixelcenter.xy;
+	vs.pos = o.pos;
+	vs.colors_0 = o.colors_0;
+	vs.colors_1 = o.colors_1;
+	vs.tex0 = o.tex0;
+	vs.tex1 = o.tex1;
+	vs.tex2 = o.tex2;
+	vs.tex3 = o.tex3;
+	vs.tex4 = o.tex4;
+	vs.tex5 = o.tex5;
+	vs.tex6 = o.tex6;
+	vs.viewPos = o.viewPos;
+gl_ClipDistance[0] = clipDist0;
+gl_ClipDistance[1] = clipDist1;
+gl_Position = float4(o.pos.x, -o.pos.y, o.pos.z, o.pos.w);
+}
+
+Failed to parse shader
+Shader Info Log:
+ERROR: 0:714: 'clipDist0' : no such field in structure 'o'
+ERROR: 0:714: '' : compilation terminated 
+ERROR: 2 compilation errors.  No code generated.
+
+
+
+
+Dolphin Version: Dolphin 49bcd8cd25
+Video Backend: Vulkan
