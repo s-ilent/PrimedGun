@@ -1275,13 +1275,11 @@ bool VulkanOpenXR::EnsurePrimeGunLaserSwapchain()
     result = xrWaitSwapchainImage(laser.swapchain, &wait_info);
     if (XR_SUCCEEDED(result) && acquired < laser.textures.size())
     {
-      StateTracker::GetInstance()->EndRenderPass();
       laser.textures[acquired]->OverrideImageLayout(VK_IMAGE_LAYOUT_UNDEFINED);
       laser.textures[acquired]->Load(0, 16, 10, 16,
                                      reinterpret_cast<const u8*>(upload_pixels.data()),
                                      upload_pixels.size() * sizeof(uint32_t), 0);
       g_command_buffer_mgr->SubmitCommandBuffer(false, true);
-      StateTracker::GetInstance()->InvalidateCachedState();
     }
 
     XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -1396,13 +1394,11 @@ bool VulkanOpenXR::EnsurePrimeGunOverlaySwapchain(uint32_t content_kind, uint32_
     result = xrWaitSwapchainImage(overlay.swapchain, &wait_info);
     if (XR_SUCCEEDED(result) && acquired < overlay.textures.size())
     {
-      StateTracker::GetInstance()->EndRenderPass();
       overlay.textures[acquired]->OverrideImageLayout(VK_IMAGE_LAYOUT_UNDEFINED);
       overlay.textures[acquired]->Load(0, width, height, width,
                                        reinterpret_cast<const u8*>(upload_pixels.data()),
                                        upload_pixels.size() * sizeof(uint32_t), 0);
       g_command_buffer_mgr->SubmitCommandBuffer(false, true);
-      StateTracker::GetInstance()->InvalidateCachedState();
     }
 
     XrSwapchainImageReleaseInfo release_info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};

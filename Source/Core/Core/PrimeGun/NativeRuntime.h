@@ -39,6 +39,7 @@ struct RuntimeSettings
   bool gun_targeting_enabled = true;
   float gun_targeting_distance = 60.0f;
   float gun_targeting_radius = 4.0f;
+  bool vr_overlays_enabled = true;
   bool xr_dpad_enabled = true;
   float xr_dpad_head_radius = 0.18f;
   float xr_dpad_head_y_below = 0.14f;

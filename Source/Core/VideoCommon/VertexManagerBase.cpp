@@ -1160,7 +1160,7 @@ void VertexManagerBase::Flush()
         bool elements_skip = false;
         auto& hunter = ShaderHunter::GetInstance();
         auto& elements = ElementsGroupManager::GetInstance();
-        const bool primegun_cannon_probe_enabled = true;
+        const bool primegun_cannon_probe_enabled = false;
         const bool hunter_enabled = hunter.IsEnabled();
         const bool hunter_debug_logging = hunter.IsDebugLogging();
         const bool hunter_has_overrides = hunter.HasOverrides();

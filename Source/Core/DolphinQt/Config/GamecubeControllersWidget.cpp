@@ -7,6 +7,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QVBoxLayout>
 
@@ -126,6 +127,9 @@ void GamecubeControllersWidget::OnGCTypeChanged(size_t index)
 
 void GamecubeControllersWidget::OnGCPadConfigure(size_t index)
 {
+  QMessageBox::information(this, tr("PrimedGun Controls"),
+                           tr("PrimedGun controls are already configured."));
+
   MappingWindow::Type type;
 
   switch (FromGCMenuIndex(m_gc_controller_boxes[index]->currentIndex()))

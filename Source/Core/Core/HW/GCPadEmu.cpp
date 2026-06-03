@@ -304,10 +304,11 @@ static uint32_t PrimeGunBeamSlotIndex(PrimeGunBeamSlot slot)
 static void PublishPrimeGunWeaponPanel(bool visible, PrimeGunBeamSlot slot,
                                        const Common::VR::OpenXRPoseState* anchor_pose)
 {
+  const bool overlays_enabled = PrimeGun::GetRuntimeSettings().vr_overlays_enabled;
   auto overlay = Common::VR::OpenXRInputState::GetPrimeGunOverlay();
-  overlay.weapon_panel_visible = visible;
+  overlay.weapon_panel_visible = overlays_enabled && visible;
   overlay.weapon_selected_index = PrimeGunBeamSlotIndex(slot);
-  if (visible && anchor_pose && anchor_pose->valid)
+  if (overlays_enabled && visible && anchor_pose && anchor_pose->valid)
   {
     overlay.weapon_panel_position = anchor_pose->position;
     overlay.weapon_panel_orientation = anchor_pose->orientation;
@@ -586,16 +587,21 @@ static bool ApplyPrimeGunModernControls(GCPadStatus* pad)
   const bool fire_pressed = game_right.connected && game_right.trigger_button;
   constexpr float stick_button_threshold = 0.55f;
 
+  const bool swap_sticks = overlay.directional_movement_use_right_stick;
+  const auto& move_stick = swap_sticks ? game_right : game_left;
+  const auto& look_stick = swap_sticks ? game_left : game_right;
+
   // PrimeGun owns the first-person locomotion layout:
-  // left stick Y = forward/back, left stick X = runtime strafe, right stick X = turn.
+  // movement stick Y = forward/back, movement stick X = runtime strafe,
+  // look stick X = turn, look stick up = jump.
   pad->stickX = orbit_lock_active && left.connected ?
                     PrimeGunAxisToPadByte(left.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
-                    game_right.connected && !weapon_modifier ?
-          PrimeGunAxisToPadByte(game_right.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
+                    look_stick.connected && !weapon_modifier ?
+          PrimeGunAxisToPadByte(look_stick.thumbstick_x, GCPadStatus::MAIN_STICK_CENTER_X) :
           GCPadStatus::MAIN_STICK_CENTER_X;
   pad->stickY =
-      left.connected && !suppress_left_stick ?
-          PrimeGunAxisToPadByte(left.thumbstick_y, GCPadStatus::MAIN_STICK_CENTER_Y) :
+      move_stick.connected && !suppress_left_stick ?
+          PrimeGunAxisToPadByte(move_stick.thumbstick_y, GCPadStatus::MAIN_STICK_CENTER_Y) :
                        GCPadStatus::MAIN_STICK_CENTER_Y;
 
   if (weapon_modifier && weapon_hand.connected)
@@ -633,7 +639,7 @@ static bool ApplyPrimeGunModernControls(GCPadStatus* pad)
       pad->button |= PAD_BUTTON_START;
     if (game_right.squeeze_button)
       pad->button |= PAD_BUTTON_Y;
-    if (!weapon_modifier && game_right.thumbstick_y > stick_button_threshold)
+    if (!weapon_modifier && look_stick.connected && look_stick.thumbstick_y > stick_button_threshold)
       pad->button |= PAD_BUTTON_B;
   }
 

@@ -10,7 +10,6 @@ finish-args:
   - --socket=pulseaudio
   - --socket=wayland
   - --socket=x11
-  - --share=network
   - --share=ipc
   # required for the emulated bluetooth adapter feature to work.
   - --allow=bluetooth
@@ -27,8 +26,6 @@ finish-args:
   - --filesystem=~/.var/app/com.valvesoftware.Steam/config/openvr:ro
   - --filesystem=~/.var/app/com.valvesoftware.Steam/data/Steam
   - --filesystem=~/.var/app/com.valvesoftware.Steam/.local/share/Steam
-  - --filesystem=xdg-run/app/com.discordapp.Discord:create
-  - --filesystem=xdg-run/discord-ipc-0:create
   # required to disable the screensaver in various desktops
   - --talk-name=org.freedesktop.ScreenSaver
   - --talk-name=org.xfce.ScreenSaver

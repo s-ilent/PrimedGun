@@ -548,18 +548,6 @@ void GameList::ShowContextMenu(const QPoint&)
     menu->addAction(tr("New Tag..."), this, &GameList::NewTag);
     menu->addAction(tr("Remove Tag..."), this, &GameList::DeleteTag);
 
-    menu->addSeparator();
-
-    QAction* netplay_host = new QAction(tr("Host with NetPlay"), menu);
-
-    connect(netplay_host, &QAction::triggered, [this, game] { emit NetPlayHost(*game); });
-
-    connect(&Settings::Instance(), &Settings::EmulationStateChanged, menu, [=](Core::State state) {
-      netplay_host->setEnabled(state == Core::State::Uninitialized);
-    });
-    netplay_host->setEnabled(Core::IsUninitialized(system));
-
-    menu->addAction(netplay_host);
   }
 
   menu->exec(QCursor::pos());

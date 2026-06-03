@@ -1404,6 +1404,10 @@ void MainWindow::ConnectStack()
         settings.value(QStringLiteral("primegun/gun_targeting_radius"),
                        runtime.gun_targeting_radius)
             .toFloat();
+    runtime.vr_overlays_enabled =
+        settings.value(QStringLiteral("primegun/vr_overlays_enabled"),
+                       runtime.vr_overlays_enabled)
+            .toBool();
     runtime.xr_dpad_enabled =
         settings.value(QStringLiteral("primegun/xr_dpad_enabled"), runtime.xr_dpad_enabled).toBool();
     runtime.xr_dpad_head_radius =
@@ -1481,6 +1485,7 @@ void MainWindow::ConnectStack()
     settings.setValue(QStringLiteral("primegun/gun_targeting_distance"),
                       runtime.gun_targeting_distance);
     settings.setValue(QStringLiteral("primegun/gun_targeting_radius"), runtime.gun_targeting_radius);
+    settings.setValue(QStringLiteral("primegun/vr_overlays_enabled"), runtime.vr_overlays_enabled);
     settings.setValue(QStringLiteral("primegun/xr_dpad_enabled"), runtime.xr_dpad_enabled);
     settings.setValue(QStringLiteral("primegun/xr_dpad_head_radius"), runtime.xr_dpad_head_radius);
     settings.setValue(QStringLiteral("primegun/xr_dpad_head_y_below"),
@@ -1732,6 +1737,10 @@ void MainWindow::ConnectStack()
   controller_layout->addWidget(reset_controller);
   auto* right_hand = new QRadioButton(tr("Right hand"), game_tab);
   auto* left_hand = new QRadioButton(tr("Left hand"), game_tab);
+  auto* hand_group = new QButtonGroup(game_tab);
+  hand_group->addButton(right_hand);
+  hand_group->addButton(left_hand);
+  hand_group->setExclusive(true);
   right_hand->setChecked(runtime->use_right_hand);
   left_hand->setChecked(!runtime->use_right_hand);
   auto* hand_row = new QHBoxLayout;
@@ -1742,6 +1751,9 @@ void MainWindow::ConnectStack()
   auto* auto_bindings = new QCheckBox(tr("Auto set controller bindings"), game_tab);
   auto_bindings->setChecked(true);
   controller_layout->addWidget(auto_bindings);
+  auto* vr_overlays_enabled = new QCheckBox(tr("In-headset overlays"), game_tab);
+  vr_overlays_enabled->setChecked(runtime->vr_overlays_enabled);
+  controller_layout->addWidget(vr_overlays_enabled);
   separator(controller_layout);
   controller_layout->addWidget(section_label(tr("Left hand D-pad"), game_tab));
   auto* dpad_enabled = new QCheckBox(tr("Enable visor gesture input"), game_tab);
@@ -1818,6 +1830,10 @@ void MainWindow::ConnectStack()
   controller_layout->addWidget(movement_enabled);
   auto* left_stick = new QRadioButton(tr("Left stick"), game_tab);
   auto* right_stick = new QRadioButton(tr("Right stick"), game_tab);
+  auto* move_stick_group = new QButtonGroup(game_tab);
+  move_stick_group->addButton(left_stick);
+  move_stick_group->addButton(right_stick);
+  move_stick_group->setExclusive(true);
   left_stick->setChecked(!runtime->directional_movement_use_right_stick);
   right_stick->setChecked(runtime->directional_movement_use_right_stick);
   auto* move_stick_row = new QHBoxLayout;
@@ -1827,6 +1843,10 @@ void MainWindow::ConnectStack()
   controller_layout->addLayout(move_stick_row);
   auto* controller_direction = new QRadioButton(tr("Controller direction"), game_tab);
   auto* hmd_direction = new QRadioButton(tr("HMD direction"), game_tab);
+  auto* movement_direction_group = new QButtonGroup(game_tab);
+  movement_direction_group->addButton(controller_direction);
+  movement_direction_group->addButton(hmd_direction);
+  movement_direction_group->setExclusive(true);
   controller_direction->setChecked(!runtime->directional_movement_use_hmd_direction);
   hmd_direction->setChecked(runtime->directional_movement_use_hmd_direction);
   auto* movement_direction_row = new QHBoxLayout;
@@ -2313,6 +2333,7 @@ void MainWindow::ConnectStack()
   const auto refresh_visible_settings = [=] {
     const QSignalBlocker right_hand_blocker{right_hand};
     const QSignalBlocker left_hand_blocker{left_hand};
+    const QSignalBlocker vr_overlays_enabled_blocker{vr_overlays_enabled};
     const QSignalBlocker dpad_enabled_blocker{dpad_enabled};
     const QSignalBlocker movement_enabled_blocker{movement_enabled};
     const QSignalBlocker left_stick_blocker{left_stick};
@@ -2342,6 +2363,7 @@ void MainWindow::ConnectStack()
 
     right_hand->setChecked(runtime->use_right_hand);
     left_hand->setChecked(!runtime->use_right_hand);
+    vr_overlays_enabled->setChecked(runtime->vr_overlays_enabled);
     dpad_enabled->setChecked(runtime->xr_dpad_enabled);
     movement_enabled->setChecked(runtime->directional_movement_enabled);
     left_stick->setChecked(!runtime->directional_movement_use_right_stick);
@@ -2379,6 +2401,7 @@ void MainWindow::ConnectStack()
   connect(reset_controller, &QPushButton::clicked, this,
           [runtime, refresh_visible_settings, apply_runtime] {
     runtime->use_right_hand = true;
+    runtime->vr_overlays_enabled = true;
     runtime->xr_dpad_enabled = true;
     runtime->directional_movement_enabled = true;
     runtime->directional_movement_use_right_stick = false;
@@ -2414,6 +2437,11 @@ void MainWindow::ConnectStack()
       runtime->use_right_hand = false;
       apply_runtime();
     }
+  });
+  connect(vr_overlays_enabled, &QCheckBox::toggled, this,
+          [runtime, apply_runtime](bool checked) {
+    runtime->vr_overlays_enabled = checked;
+    apply_runtime();
   });
   connect(dpad_enabled, &QCheckBox::toggled, this, [runtime, apply_runtime](bool checked) {
     runtime->xr_dpad_enabled = checked;
@@ -2612,7 +2640,6 @@ void MainWindow::ConnectStack()
   addDockWidget(Qt::LeftDockWidgetArea, m_watch_widget);
   addDockWidget(Qt::LeftDockWidgetArea, m_breakpoint_widget);
   addDockWidget(Qt::LeftDockWidgetArea, m_memory_widget);
-  addDockWidget(Qt::LeftDockWidgetArea, m_network_widget);
   addDockWidget(Qt::LeftDockWidgetArea, m_jit_widget);
   addDockWidget(Qt::LeftDockWidgetArea, m_assembler_widget);
 
@@ -2623,7 +2650,6 @@ void MainWindow::ConnectStack()
   tabifyDockWidget(m_log_widget, m_watch_widget);
   tabifyDockWidget(m_log_widget, m_breakpoint_widget);
   tabifyDockWidget(m_log_widget, m_memory_widget);
-  tabifyDockWidget(m_log_widget, m_network_widget);
   tabifyDockWidget(m_log_widget, m_jit_widget);
   tabifyDockWidget(m_log_widget, m_assembler_widget);
 }

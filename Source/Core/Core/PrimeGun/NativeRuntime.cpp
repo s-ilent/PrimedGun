@@ -1710,7 +1710,7 @@ void UpdateDirectionalMovement(const Core::CPUThreadGuard& guard,
     return;
   }
 
-  const int move_hand = 0;
+  const int move_hand = settings.directional_movement_use_right_stick ? 1 : 0;
   const Common::VR::OpenXRControllerState& controller = snapshot.controllers[move_hand];
   if (!controller.connected ||
       (!settings.directional_movement_use_hmd_direction && !controller.aim_pose.valid))
@@ -2315,9 +2315,9 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   const Common::VR::PrimeGunVrOverlayState previous =
       Common::VR::OpenXRInputState::GetPrimeGunOverlay();
   Common::VR::PrimeGunVrOverlayState overlay{};
-  overlay.prompt_visible = prompt_visible;
-  overlay.menu_visible = s_vr_menu_visible;
-  overlay.menu_pointer_active = s_vr_menu_visible;
+  overlay.prompt_visible = settings.vr_overlays_enabled && prompt_visible;
+  overlay.menu_visible = settings.vr_overlays_enabled && s_vr_menu_visible;
+  overlay.menu_pointer_active = settings.vr_overlays_enabled && s_vr_menu_visible;
   overlay.saved_notice = s_frame_counter < s_vr_menu_saved_notice_until_frame;
   overlay.generation = s_vr_menu_generation;
   overlay.tab = s_vr_menu_tab;
@@ -2325,7 +2325,7 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
   overlay.item_count = VrMenuItemCountForTab(s_vr_menu_tab);
   overlay.cannon_texture_slot = s_vr_cannon_texture_slot;
   overlay.cannon_texture_notice = s_frame_counter < s_vr_cannon_texture_notice_until_frame;
-  overlay.weapon_panel_visible = previous.weapon_panel_visible;
+  overlay.weapon_panel_visible = settings.vr_overlays_enabled && previous.weapon_panel_visible;
   overlay.weapon_selected_index = previous.weapon_selected_index;
   overlay.weapon_panel_position = previous.weapon_panel_position;
   overlay.weapon_panel_orientation = previous.weapon_panel_orientation;
@@ -2362,6 +2362,18 @@ void PublishVrOverlayState(const RuntimeSettings& settings, bool prompt_visible)
 void UpdateVrMenu(const Common::VR::OpenXRInputSnapshot& snapshot, RuntimeSettings* settings,
                   bool prompt_visible)
 {
+  if (!settings->vr_overlays_enabled)
+  {
+    if (s_vr_menu_visible)
+    {
+      s_vr_menu_visible = false;
+      ++s_vr_menu_generation;
+    }
+    s_last_vr_menu_thumbstick = false;
+    PublishVrOverlayState(*settings, false);
+    return;
+  }
+
   if (!snapshot.runtime_active)
   {
     PublishVrOverlayState(*settings, false);
