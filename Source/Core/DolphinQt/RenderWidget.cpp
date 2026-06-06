@@ -19,6 +19,7 @@
 
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
+#include "Core/PrimeGun/PPCTrace.h"
 #include "Core/State.h"
 #include "Core/System.h"
 
@@ -365,6 +366,12 @@ bool RenderWidget::event(QEvent* event)
   case QEvent::KeyPress:
   {
     QKeyEvent* ke = static_cast<QKeyEvent*>(event);
+    if (ke->key() == Qt::Key_F7 && !ke->isAutoRepeat())
+    {
+      PrimeGun::PPCTrace::Toggle();
+      return true;
+    }
+
     if (ke->key() == Qt::Key_Escape)
       emit EscapePressed();
 
@@ -526,6 +533,9 @@ void RenderWidget::PassEventToPresenter(const QEvent* event)
     // Even masked, the key codes are still unique, so conflicts aren't an issue.
     // The actual text input goes through AddInputCharactersUTF8().
     const QKeyEvent* key_event = static_cast<const QKeyEvent*>(event);
+    if (key_event->key() == Qt::Key_F7)
+      return;
+
     const bool is_down = event->type() == QEvent::KeyPress;
     const u32 key = static_cast<u32>(key_event->key() & 0x1FF);
 

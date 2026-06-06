@@ -1727,11 +1727,7 @@ std::pair<int, int> ShaderHunter::ResolveElementRange(const ConditionalOverride&
   const int previous_total = total_it->second;
   int reference_total = cond.element_reference_total;
   if (reference_total <= 0)
-  {
-    const auto inserted =
-        m_runtime_element_reference_totals.emplace(cond.hash, previous_total);
-    reference_total = inserted.first->second;
-  }
+    return {start, end};
 
   const int delta = previous_total - reference_total;
   start += delta;

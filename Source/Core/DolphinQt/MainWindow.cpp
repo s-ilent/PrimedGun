@@ -26,6 +26,7 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QPixmap>
 #include <QSizePolicy>
 #include <QButtonGroup>
@@ -96,6 +97,7 @@
 #include "Core/IOS/USB/Bluetooth/BTEmu.h"
 #include "Core/Movie.h"
 #include "Core/PrimeGun/NativeRuntime.h"
+#include "Core/PrimeGun/PPCTrace.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "Core/WiiUtils.h"
@@ -3461,6 +3463,16 @@ void MainWindow::UpdateScreenSaverInhibition()
 
 bool MainWindow::eventFilter(QObject* object, QEvent* event)
 {
+  if (event->type() == QEvent::KeyPress)
+  {
+    const QKeyEvent* key_event = static_cast<const QKeyEvent*>(event);
+    if (key_event->key() == Qt::Key_F7 && !key_event->isAutoRepeat())
+    {
+      PrimeGun::PPCTrace::Toggle();
+      return true;
+    }
+  }
+
   if (event->type() == QEvent::Close)
   {
     if (object == this)

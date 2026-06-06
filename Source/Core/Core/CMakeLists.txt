@@ -495,6 +495,8 @@ add_library(core
   PatchEngine.h
   PrimeGun/NativeRuntime.cpp
   PrimeGun/NativeRuntime.h
+  PrimeGun/PPCTrace.cpp
+  PrimeGun/PPCTrace.h
   PowerPC/BreakPoints.cpp
   PowerPC/BreakPoints.h
   PowerPC/CachedInterpreter/CachedInterpreter_Disassembler.cpp
