@@ -2820,6 +2820,9 @@ bool ApplyFirstPersonPitchLoadPatch(const Core::CPUThreadGuard& guard)
   const u32 branch = PpcBranch(patch.address, patch.cave);
   if (current == branch)
   {
+    const u32 return_addr = patch.address + 4u;
+    TryWriteInstruction(guard, patch.cave + 0x00u, LOAD_ZERO_TO_F31);
+    TryWriteInstruction(guard, patch.cave + 0x04u, PpcBranch(patch.cave + 0x04u, return_addr));
     patch.applied = true;
     return false;
   }
@@ -2830,16 +2833,9 @@ bool ApplyFirstPersonPitchLoadPatch(const Core::CPUThreadGuard& guard)
     return false;
   }
 
-  const u32 zero_label = patch.cave + 0x18u;
   const u32 return_addr = patch.address + 4u;
-  TryWriteInstruction(guard, patch.cave + 0x00u, 0x819E0330u);
-  TryWriteInstruction(guard, patch.cave + 0x04u, 0x2C0C0000u);
-  TryWriteInstruction(guard, patch.cave + 0x08u, PpcBeq(patch.cave + 0x08u, zero_label));
-  TryWriteInstruction(guard, patch.cave + 0x0Cu, patch.original);
-  TryWriteInstruction(guard, patch.cave + 0x10u, PpcBranch(patch.cave + 0x10u, return_addr));
-  TryWriteInstruction(guard, patch.cave + 0x14u, 0x60000000u);
-  TryWriteInstruction(guard, patch.cave + 0x18u, LOAD_ZERO_TO_F31);
-  TryWriteInstruction(guard, patch.cave + 0x1Cu, PpcBranch(patch.cave + 0x1Cu, return_addr));
+  TryWriteInstruction(guard, patch.cave + 0x00u, LOAD_ZERO_TO_F31);
+  TryWriteInstruction(guard, patch.cave + 0x04u, PpcBranch(patch.cave + 0x04u, return_addr));
   patch.applied = TryWriteInstruction(guard, patch.address, branch);
   return patch.applied;
 }
@@ -3015,6 +3011,19 @@ bool ApplyConditionalCombatPitchPatch(const Core::CPUThreadGuard& guard, Dynamic
   const u32 branch = PpcBranch(patch.address, patch.cave);
   if (current == branch)
   {
+    const u32 original_label = patch.cave + 0x18u;
+    const u32 zero_label = patch.cave + 0x20u;
+    const u32 return_addr = patch.address + 4u;
+    TryWriteInstruction(guard, patch.cave + 0x00u, 0x3D808045u);
+    TryWriteInstruction(guard, patch.cave + 0x04u, 0x618CA1A8u);
+    TryWriteInstruction(guard, patch.cave + 0x08u, 0x818C084Cu);
+    TryWriteInstruction(guard, patch.cave + 0x0Cu, 0x2C0C0000u);
+    TryWriteInstruction(guard, patch.cave + 0x10u, PpcBeq(patch.cave + 0x10u, original_label));
+    TryWriteInstruction(guard, patch.cave + 0x14u, PpcBranch(patch.cave + 0x14u, zero_label));
+    TryWriteInstruction(guard, patch.cave + 0x18u, patch.original);
+    TryWriteInstruction(guard, patch.cave + 0x1Cu, PpcBranch(patch.cave + 0x1Cu, return_addr));
+    TryWriteInstruction(guard, patch.cave + 0x20u, patch.replacement);
+    TryWriteInstruction(guard, patch.cave + 0x24u, PpcBranch(patch.cave + 0x24u, return_addr));
     patch.applied = true;
     return false;
   }
@@ -3025,21 +3034,19 @@ bool ApplyConditionalCombatPitchPatch(const Core::CPUThreadGuard& guard, Dynamic
     return false;
   }
 
-  const u32 original_label = patch.cave + 0x20u;
-  const u32 zero_label = patch.cave + 0x28u;
+  const u32 original_label = patch.cave + 0x18u;
+  const u32 zero_label = patch.cave + 0x20u;
   const u32 return_addr = patch.address + 4u;
   TryWriteInstruction(guard, patch.cave + 0x00u, 0x3D808045u);
   TryWriteInstruction(guard, patch.cave + 0x04u, 0x618CA1A8u);
   TryWriteInstruction(guard, patch.cave + 0x08u, 0x818C084Cu);
   TryWriteInstruction(guard, patch.cave + 0x0Cu, 0x2C0C0000u);
   TryWriteInstruction(guard, patch.cave + 0x10u, PpcBeq(patch.cave + 0x10u, original_label));
-  TryWriteInstruction(guard, patch.cave + 0x14u, 0x818C0330u);
-  TryWriteInstruction(guard, patch.cave + 0x18u, 0x2C0C0000u);
-  TryWriteInstruction(guard, patch.cave + 0x1Cu, PpcBeq(patch.cave + 0x1Cu, zero_label));
-  TryWriteInstruction(guard, patch.cave + 0x20u, patch.original);
+  TryWriteInstruction(guard, patch.cave + 0x14u, PpcBranch(patch.cave + 0x14u, zero_label));
+  TryWriteInstruction(guard, patch.cave + 0x18u, patch.original);
+  TryWriteInstruction(guard, patch.cave + 0x1Cu, PpcBranch(patch.cave + 0x1Cu, return_addr));
+  TryWriteInstruction(guard, patch.cave + 0x20u, patch.replacement);
   TryWriteInstruction(guard, patch.cave + 0x24u, PpcBranch(patch.cave + 0x24u, return_addr));
-  TryWriteInstruction(guard, patch.cave + 0x28u, patch.replacement);
-  TryWriteInstruction(guard, patch.cave + 0x2Cu, PpcBranch(patch.cave + 0x2Cu, return_addr));
   patch.applied = TryWriteInstruction(guard, patch.address, branch);
   return patch.applied;
 }
@@ -3053,6 +3060,20 @@ bool ApplyConditionalElevationPitchPatch(const Core::CPUThreadGuard& guard, Dyna
   const u32 branch = PpcBranch(patch.address, patch.cave);
   if (current == branch)
   {
+    const u32 original_label = patch.cave + 0x18u;
+    const u32 zero_label = patch.cave + 0x20u;
+    const u32 return_addr = patch.address + 4u;
+    TryWriteInstruction(guard, patch.cave + 0x00u, 0x3D808045u);
+    TryWriteInstruction(guard, patch.cave + 0x04u, 0x618CA1A8u);
+    TryWriteInstruction(guard, patch.cave + 0x08u, 0x818C084Cu);
+    TryWriteInstruction(guard, patch.cave + 0x0Cu, 0x2C0C0000u);
+    TryWriteInstruction(guard, patch.cave + 0x10u, PpcBeq(patch.cave + 0x10u, original_label));
+    TryWriteInstruction(guard, patch.cave + 0x14u, PpcBranch(patch.cave + 0x14u, zero_label));
+    TryWriteInstruction(guard, patch.cave + 0x18u, patch.original);
+    TryWriteInstruction(guard, patch.cave + 0x1Cu, PpcBranch(patch.cave + 0x1Cu, return_addr));
+    TryWriteInstruction(guard, patch.cave + 0x20u, 0xC00280B0u);
+    TryWriteInstruction(guard, patch.cave + 0x24u, patch.original);
+    TryWriteInstruction(guard, patch.cave + 0x28u, PpcBranch(patch.cave + 0x28u, return_addr));
     patch.applied = true;
     return false;
   }
@@ -3063,22 +3084,20 @@ bool ApplyConditionalElevationPitchPatch(const Core::CPUThreadGuard& guard, Dyna
     return false;
   }
 
-  const u32 original_label = patch.cave + 0x20u;
-  const u32 zero_label = patch.cave + 0x28u;
+  const u32 original_label = patch.cave + 0x18u;
+  const u32 zero_label = patch.cave + 0x20u;
   const u32 return_addr = patch.address + 4u;
   TryWriteInstruction(guard, patch.cave + 0x00u, 0x3D808045u);
   TryWriteInstruction(guard, patch.cave + 0x04u, 0x618CA1A8u);
   TryWriteInstruction(guard, patch.cave + 0x08u, 0x818C084Cu);
   TryWriteInstruction(guard, patch.cave + 0x0Cu, 0x2C0C0000u);
   TryWriteInstruction(guard, patch.cave + 0x10u, PpcBeq(patch.cave + 0x10u, original_label));
-  TryWriteInstruction(guard, patch.cave + 0x14u, 0x816C0330u);
-  TryWriteInstruction(guard, patch.cave + 0x18u, 0x2C0B0000u);
-  TryWriteInstruction(guard, patch.cave + 0x1Cu, PpcBeq(patch.cave + 0x1Cu, zero_label));
-  TryWriteInstruction(guard, patch.cave + 0x20u, patch.original);
-  TryWriteInstruction(guard, patch.cave + 0x24u, PpcBranch(patch.cave + 0x24u, return_addr));
-  TryWriteInstruction(guard, patch.cave + 0x28u, 0xC00280B0u);
-  TryWriteInstruction(guard, patch.cave + 0x2Cu, patch.original);
-  TryWriteInstruction(guard, patch.cave + 0x30u, PpcBranch(patch.cave + 0x30u, return_addr));
+  TryWriteInstruction(guard, patch.cave + 0x14u, PpcBranch(patch.cave + 0x14u, zero_label));
+  TryWriteInstruction(guard, patch.cave + 0x18u, patch.original);
+  TryWriteInstruction(guard, patch.cave + 0x1Cu, PpcBranch(patch.cave + 0x1Cu, return_addr));
+  TryWriteInstruction(guard, patch.cave + 0x20u, 0xC00280B0u);
+  TryWriteInstruction(guard, patch.cave + 0x24u, patch.original);
+  TryWriteInstruction(guard, patch.cave + 0x28u, PpcBranch(patch.cave + 0x28u, return_addr));
   patch.applied = TryWriteInstruction(guard, patch.address, branch);
   return patch.applied;
 }
