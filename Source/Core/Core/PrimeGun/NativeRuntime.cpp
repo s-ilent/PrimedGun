@@ -960,6 +960,7 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
   const u16 player_uid = static_cast<u16>(player_uid_word >> 16);
   const float max_along = settings.gun_targeting_distance;
   const float max_perp = settings.gun_targeting_radius;
+  constexpr float scan_pick_radius_multiplier = 3.0f;
   const float grapple_max_perp = max_perp * 1.30f;
   const bool scan_mode = ScanVisorActive(guard, player);
   bool found = false;
@@ -1023,7 +1024,10 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
       continue;
 
     const float perp = std::sqrt(perp_sq);
-    const float candidate_max_perp = grapple_candidate ? grapple_max_perp : max_perp;
+    const float candidate_max_perp =
+        scan_mode && scan_candidate ? max_perp * scan_pick_radius_multiplier :
+        grapple_candidate             ? grapple_max_perp :
+                                       max_perp;
     if (perp > candidate_max_perp)
       continue;
 
@@ -1031,7 +1035,11 @@ bool PickGunRayTarget(const Core::CPUThreadGuard& guard, u32 state_manager, u32 
     if (strict_lock_aim)
     {
       const float strict_cone = 0.45f + along * (scan_mode ? 0.085f : 0.075f);
-      aim_cone_perp = std::min(candidate_max_perp, grapple_candidate ? strict_cone * 1.30f : strict_cone);
+      const float strict_candidate_cone =
+          scan_mode && scan_candidate ? strict_cone * scan_pick_radius_multiplier :
+          grapple_candidate           ? strict_cone * 1.30f :
+                                       strict_cone;
+      aim_cone_perp = std::min(candidate_max_perp, strict_candidate_cone);
       if (perp > aim_cone_perp)
         continue;
     }
@@ -1094,8 +1102,7 @@ void UpdateGunTargeting(const Core::CPUThreadGuard& guard, u32 state_manager, u3
   static u32 s_last_pick_player = 0;
   static u32 s_last_pick_gun = 0;
 
-  if (!settings.gun_targeting_enabled || !settings.patch_gun_ray_target || player < 0x80000000u ||
-      ScanVisorActive(guard, player))
+  if (!settings.gun_targeting_enabled || !settings.patch_gun_ray_target || player < 0x80000000u)
   {
     s_last_pick_valid = false;
     WriteGunTargetScratch(guard, 0, 0xffffu);
@@ -1522,7 +1529,35 @@ void UpdateReticleBillboard(const Core::CPUThreadGuard& guard,
   WriteBasis9(guard, RETICLE_BILLBOARD_SCRATCH + 4, hmd);
 }
 
-void UpdateScanPitch(const Core::CPUThreadGuard& guard, u32 player, const Matrix3x4& controller_mat)
+bool HmdPitchFromSnapshot(const Common::VR::OpenXRInputSnapshot& snapshot, float yaw_delta_deg,
+                          float* pitch_out)
+{
+  if (!snapshot.head_pose.valid)
+    return false;
+
+  Pose adjusted_hmd = PoseFromOpenXR(snapshot.head_pose);
+  ApplyTrackingWorldYaw(adjusted_hmd, yaw_delta_deg);
+
+  const Matrix3x4 hmd =
+      PoseToPrimeMatrix(adjusted_hmd, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+  return GunPitchFromMatrix(hmd, pitch_out);
+}
+
+bool MatrixFromHmdSnapshot(const Common::VR::OpenXRInputSnapshot& snapshot, float yaw_delta_deg,
+                           Matrix3x4* hmd)
+{
+  if (!snapshot.head_pose.valid)
+    return false;
+
+  Pose adjusted_hmd = PoseFromOpenXR(snapshot.head_pose);
+  ApplyTrackingWorldYaw(adjusted_hmd, yaw_delta_deg);
+  *hmd = PoseToPrimeMatrix(adjusted_hmd, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f);
+  return true;
+}
+
+void UpdateScanPitch(const Core::CPUThreadGuard& guard,
+                     const Common::VR::OpenXRInputSnapshot& snapshot, u32 player,
+                     float yaw_delta_deg)
 {
   const bool scan_active = ScanVisorActive(guard, player);
   if (player != s_scan_last_player)
@@ -1537,14 +1572,13 @@ void UpdateScanPitch(const Core::CPUThreadGuard& guard, u32 player, const Matrix
   {
     s_scan_normal_frames = 0;
     float pitch = 0.0f;
-    if (!GunPitchFromMatrix(controller_mat, &pitch))
+    if (!HmdPitchFromSnapshot(snapshot, yaw_delta_deg, &pitch))
       return;
 
     constexpr float max_scan_pitch = 1.2217305f;  // 70 degrees
     pitch = std::clamp(pitch, -max_scan_pitch, max_scan_pitch);
     constexpr float pitch_smooth = 0.45f;
     s_smooth_scan_pitch = s_smooth_scan_pitch * pitch_smooth + pitch * (1.0f - pitch_smooth);
-    TryWriteFloat(guard, player + PLAYER_FREE_LOOK_PITCH_ANGLE_OFFSET, s_smooth_scan_pitch);
   }
   else if (s_scan_was_active)
   {
@@ -1557,11 +1591,28 @@ void UpdateScanPitch(const Core::CPUThreadGuard& guard, u32 player, const Matrix
   else if (s_scan_normal_frames == 8)
   {
     s_smooth_scan_pitch = 0.0f;
-    TryWriteFloat(guard, player + PLAYER_FREE_LOOK_PITCH_ANGLE_OFFSET, 0.0f);
     ++s_scan_normal_frames;
   }
 
   s_scan_was_active = scan_active;
+}
+
+void UpdateScanTargetingFromHmd(const Core::CPUThreadGuard& guard,
+                                const Common::VR::OpenXRInputSnapshot& snapshot, u32 state_manager,
+                                u32 player, const RuntimeSettings& settings, float yaw_delta_deg)
+{
+  if (!ScanVisorActive(guard, player))
+    return;
+
+  Matrix3x4 hmd = {};
+  if (!MatrixFromHmdSnapshot(snapshot, yaw_delta_deg, &hmd))
+  {
+    WriteGunTargetScratch(guard, player, 0xffffu);
+    return;
+  }
+
+  UpdateGunTargeting(guard, state_manager, player, player, player + ADDRESS.transform_offset, hmd,
+                     settings);
 }
 
 void UpdateXrDpad(const Core::CPUThreadGuard& guard,
@@ -2695,12 +2746,18 @@ void UpdateCannonTracking(const Core::CPUThreadGuard& guard)
     return;
   }
 
-  UpdateScanPitch(guard, player, mat);
+  UpdateScanPitch(guard, snapshot, player, yaw_delta_deg);
+  const bool scan_active = ScanVisorActive(guard, player);
+  if (scan_active)
+    UpdateScanTargetingFromHmd(guard, snapshot, ADDRESS.state_manager, player, settings, yaw_delta_deg);
 
   u32 gun = 0;
   if (!PlayerIsFirstPersonGunReady(guard, player) ||
       !TryReadU32(guard, player + ADDRESS.cannon_offset, &gun) || gun < 0x80000000u)
   {
+    if (scan_active)
+      return;
+
     s_smooth_matrix_valid = false;
     s_last_validated_gun = 0;
     TryWriteU32(guard, CANNON_EXPECTED_GUN_SCRATCH, 0);
