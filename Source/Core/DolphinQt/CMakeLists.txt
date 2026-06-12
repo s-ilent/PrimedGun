@@ -614,6 +614,19 @@ add_custom_target(primegun-user-assets-copy
 )
 add_dependencies(dolphin-emu primegun-user-assets-copy)
 
+file(GLOB_RECURSE primegun_runtime_asset_files CONFIGURE_DEPENDS
+  "${CMAKE_SOURCE_DIR}/assets/*"
+)
+add_custom_target(primegun-runtime-assets-copy
+  COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:dolphin-emu>/assets"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_SOURCE_DIR}/assets"
+          "$<TARGET_FILE_DIR:dolphin-emu>/assets"
+  DEPENDS ${primegun_runtime_asset_files}
+  COMMENT "Copying PrimedGun runtime UI assets"
+)
+add_dependencies(dolphin-emu primegun-runtime-assets-copy)
+
 # Handle localization
 if(PRIMEGUN_ENABLE_TRANSLATIONS)
 find_package(Gettext)

@@ -203,8 +203,19 @@ static VRSettingMap LoadVRSettingsFromINI(std::string_view game_id)
 
   if (Common::CaseInsensitiveEquals(game_id, "GM8E01"))
   {
+    values.insert_or_assign("EnableOpenXR", "True");
     values.insert_or_assign("UnitsPerMeter", "1.50");
+    values.insert_or_assign("LeanBackAngle", "0.0");
     values.insert_or_assign("CameraForward", "0.0");
+    values.insert_or_assign("VirtualScreen", "True");
+    values.insert_or_assign("HeadLockedCurvature", "0.0");
+    values.insert_or_assign("DontClearScreen", "False");
+    values.insert_or_assign("LoadCustomShaders", "True");
+    values.insert_or_assign("DisableCPUCull", "True");
+    values.insert_or_assign("AutoVBIFromHMD", "False");
+    values.insert_or_assign("LayerOffset", "0.0020");
+    values.insert_or_assign("ElementDepth", "0.0010");
+    values.insert_or_assign("ClearEFBCopies", "0");
   }
 
   std::ifstream file(GetVRGameINIPath(game_id));
