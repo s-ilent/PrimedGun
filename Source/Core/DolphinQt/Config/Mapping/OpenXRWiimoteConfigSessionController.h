@@ -9,7 +9,7 @@
 
 namespace VR
 {
-#if defined(ENABLE_VR) && defined(_WIN32)
+#if defined(ENABLE_VR)
 class OpenXRUtilitySession;
 #endif
 }
@@ -33,7 +33,7 @@ private:
   MappingWindow* const m_window;
   const int m_port;
   QTimer* const m_overlay_timer;
-#if defined(ENABLE_VR) && defined(_WIN32)
+#if defined(ENABLE_VR)
   std::unique_ptr<VR::OpenXRUtilitySession> m_session;
 #endif
 };

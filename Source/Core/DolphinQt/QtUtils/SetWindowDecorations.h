@@ -3,14 +3,10 @@
 
 #pragma once
 
-#if defined(_WIN32)
-
 class QApplication;
 
 namespace QtUtils
 {
-// Changes the window decorations (title bar) for Windows "Dark" mode or "Dark" Dolphin Style.
+// Applies platform-specific dark window decoration hints for the active Dolphin style.
 void InstallWindowDecorationFilter(QApplication*);
 }  // namespace QtUtils
-
-#endif

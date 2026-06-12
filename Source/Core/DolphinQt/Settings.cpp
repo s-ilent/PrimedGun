@@ -184,6 +184,13 @@ void Settings::ApplyStyle()
   }
 
   QPalette palette;
+  const bool use_builtin_dark_style =
+      style_type == StyleType::Dark ||
+#ifdef _WIN32
+      (style_type != StyleType::Light && IsSystemDark());
+#else
+      false;
+#endif
 
   if (style_type == StyleType::FusionLight)
   {
@@ -326,12 +333,12 @@ void Settings::ApplyStyle()
     palette.setColor(QPalette::All, QPalette::LinkVisited, QColor(110, 70, 150));
     palette.setColor(QPalette::Disabled, QPalette::LinkVisited, QColor(110, 70, 150).darker());
   }
-#ifdef _WIN32
-  // Unlike other OSes we don't automatically get a default dark theme on Windows.
-  // We manually load a dark palette for our included "(Dark)" style,
-  //  and for *any* external style when the system is in "Dark" mode.
+  // We manually load a dark palette for our included "(Dark)" style.
+  // On Windows this also gives Dolphin a dark theme when the system is in dark mode.
+  // On Linux/Flatpak, the PrimedGun launcher should look consistent even when the
+  // host Qt/KDE theme is light.
   // Unfortunately it doesn't seem trivial to load a palette based on the stylesheet itself.
-  else if (style_type == StyleType::Dark || (style_type != StyleType::Light && IsSystemDark()))
+  else if (use_builtin_dark_style)
   {
     if (stylesheet_contents.isEmpty())
     {
@@ -355,7 +362,6 @@ void Settings::ApplyStyle()
     palette.setColor(QPalette::Link, QColor(194, 128, 46));
     palette.setColor(QPalette::LinkVisited, QColor(194, 128, 46));
   }
-#endif
   else
   {
     if (s_default_palette)

@@ -1,15 +1,21 @@
 // Copyright 2023 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#if defined(_WIN32)
-
 #include "DolphinQt/QtUtils/SetWindowDecorations.h"
 
 #include <QApplication>
 #include <QEvent>
+#include <QGuiApplication>
 #include <QWidget>
 
+#if defined(_WIN32)
 #include <dwmapi.h>
+#endif
+
+#if defined(HAVE_X11)
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#endif
 
 #include "DolphinQt/Settings.h"
 
@@ -18,14 +24,41 @@ namespace
 
 void SetQWidgetWindowDecorations(QWidget* widget)
 {
-  if (!Settings::Instance().IsThemeDark())
-    return;
+  const bool use_dark_decorations = Settings::Instance().IsThemeDark();
 
+#if defined(_WIN32)
+  if (!use_dark_decorations)
+    return;
   constexpr DWORD attribute = 20;  // DWMWINDOWATTRIBUTE::DWMWA_USE_IMMERSIVE_DARK_MODE
   constexpr BOOL use_dark_title_bar = TRUE;
 
   DwmSetWindowAttribute(HWND(widget->winId()), attribute, &use_dark_title_bar,
                         DWORD(sizeof(use_dark_title_bar)));
+#elif defined(HAVE_X11)
+  if (QGuiApplication::platformName() != QStringLiteral("xcb"))
+    return;
+
+  Display* display = XOpenDisplay(nullptr);
+  if (!display)
+    return;
+
+  const Atom property = XInternAtom(display, "_GTK_THEME_VARIANT", False);
+  if (use_dark_decorations)
+  {
+    constexpr char value[] = "dark";
+    XChangeProperty(display, static_cast<Window>(widget->winId()), property, XA_STRING, 8,
+                    PropModeReplace, reinterpret_cast<const unsigned char*>(value),
+                    sizeof(value) - 1);
+  }
+  else
+  {
+    XDeleteProperty(display, static_cast<Window>(widget->winId()), property);
+  }
+  XFlush(display);
+  XCloseDisplay(display);
+#else
+  (void)widget;
+#endif
 }
 
 class WindowDecorationFilter final : public QObject
@@ -77,5 +110,3 @@ void InstallWindowDecorationFilter(QApplication* app)
 }
 
 }  // namespace QtUtils
-
-#endif

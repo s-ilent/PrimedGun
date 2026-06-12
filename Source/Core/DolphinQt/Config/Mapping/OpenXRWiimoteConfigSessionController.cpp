@@ -23,7 +23,7 @@
 #include "Core/System.h"
 #include "DolphinQt/Config/Mapping/MappingWindow.h"
 #include "DolphinQt/Settings.h"
-#if defined(ENABLE_VR) && defined(_WIN32)
+#if defined(ENABLE_VR)
 #include "Common/VR/OpenXRInputState.h"
 #include "VideoCommon/VR/OpenXRManager.h"
 #include "VideoCommon/VR/OpenXRUtilitySession.h"
@@ -34,7 +34,7 @@ namespace
 constexpr int OVERLAY_WIDTH = 1024;
 constexpr int OVERLAY_HEIGHT = 704;
 
-#if defined(ENABLE_VR) && defined(_WIN32)
+#if defined(ENABLE_VR)
 QString BoolToDigit(bool value)
 {
   return value ? QStringLiteral("1") : QStringLiteral("0");
@@ -179,7 +179,7 @@ OpenXRWiimoteConfigSessionController::~OpenXRWiimoteConfigSessionController()
 
 void OpenXRWiimoteConfigSessionController::TryStart()
 {
-#if defined(ENABLE_VR) && defined(_WIN32)
+#if defined(ENABLE_VR)
   if (m_session)
     return;
 
@@ -211,7 +211,7 @@ void OpenXRWiimoteConfigSessionController::Stop()
 {
   m_overlay_timer->stop();
 
-#if defined(ENABLE_VR) && defined(_WIN32)
+#if defined(ENABLE_VR)
   if (m_session)
   {
     m_session->Stop();
@@ -222,7 +222,7 @@ void OpenXRWiimoteConfigSessionController::Stop()
 
 void OpenXRWiimoteConfigSessionController::UpdateOverlay()
 {
-#if defined(ENABLE_VR) && defined(_WIN32)
+#if defined(ENABLE_VR)
   if (!m_session)
     return;
 

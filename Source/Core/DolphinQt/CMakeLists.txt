@@ -484,6 +484,13 @@ if (WIN32)
   )
 endif()
 
+if (X11_FOUND)
+  target_link_libraries(dolphin-emu
+  PRIVATE
+    PkgConfig::X11
+  )
+endif()
+
 if (MSVC)
   set(qtGui "")
   set(qtGuiPriv "")
