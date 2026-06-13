@@ -173,9 +173,9 @@ bool OpenXRManager::CreateInstance(const std::vector<const char*>& extra_extensi
                XR_VERSION_PATCH(requested_api_version));
 
   XrApplicationInfo app_info{};
-  std::strncpy(app_info.applicationName, "Dolphin Emulator", XR_MAX_APPLICATION_NAME_SIZE - 1);
+  std::strncpy(app_info.applicationName, "PrimedGun", XR_MAX_APPLICATION_NAME_SIZE - 1);
   app_info.applicationVersion = 1;
-  std::strncpy(app_info.engineName, "Dolphin", XR_MAX_ENGINE_NAME_SIZE - 1);
+  std::strncpy(app_info.engineName, "PrimedGun", XR_MAX_ENGINE_NAME_SIZE - 1);
   app_info.engineVersion = 1;
   app_info.apiVersion = requested_api_version;
 

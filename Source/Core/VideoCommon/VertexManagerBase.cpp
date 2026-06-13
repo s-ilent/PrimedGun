@@ -1349,12 +1349,11 @@ void VertexManagerBase::Flush()
             const bool xray_signature_match =
                 xray_effect_draw && element_draw &&
                 element_draw->profile_layer != MetroidElementLayer::XRayEffect;
-            const bool d3d_xray_signature_fallback =
-                g_backend_info.api_type == APIType::D3D && xray_signature_match;
+            const bool xray_signature_fallback = xray_signature_match;
             const bool d3d_xray_hud_tex0_layer_fallback =
                 metroid_visor_fix_active && g_backend_info.api_type == APIType::D3D &&
                 IsMetroidPrime1XRayHUDDraw(element_draw);
-            if (d3d_xray_signature_fallback && handling == ShaderHunter::HandlingType::Skip)
+            if (xray_signature_fallback && handling == ShaderHunter::HandlingType::Skip)
             {
               handling = ShaderHunter::HandlingType::FullscreenMono;
             }
@@ -1464,7 +1463,7 @@ void VertexManagerBase::Flush()
               hunter.DebugLogUnmatched(vs_hash, ps_hash, gs_hash);
             }
             LogMetroidPrime1XRayDraw(m_draw_counter, element_draw, handling, vs_hash, ps_hash,
-                                     gs_hash, forced_texture_layer, d3d_xray_signature_fallback,
+                                     gs_hash, forced_texture_layer, xray_signature_fallback,
                                      d3d_xray_hud_tex0_layer_fallback);
           }
 

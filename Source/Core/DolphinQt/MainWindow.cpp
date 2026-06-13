@@ -198,15 +198,32 @@ QString PrimedGunCannonLibraryDir()
                          QLatin1Char('/') + QString::fromLatin1(PRIMEGUN_CANNON_LIBRARY_FOLDER));
 }
 
+QString PrimedGunCannonAppLibraryDir()
+{
+  return QDir::cleanPath(QString::fromStdString(File::GetSysDirectory()) +
+                         QStringLiteral("../User/Load/") +
+                         QString::fromLatin1(PRIMEGUN_CANNON_LIBRARY_FOLDER));
+}
+
+QString PrimedGunCannonLibraryFilePath(const QString& relative_path)
+{
+  const QString user_path = QDir::cleanPath(PrimedGunCannonLibraryDir() + QLatin1Char('/') +
+                                           relative_path);
+  if (QFileInfo(user_path).isFile())
+    return user_path;
+
+  const QString app_path = QDir::cleanPath(PrimedGunCannonAppLibraryDir() + QLatin1Char('/') +
+                                          relative_path);
+  if (QFileInfo(app_path).isFile())
+    return app_path;
+
+  return user_path;
+}
+
 QString PrimedGunCannonSlotDir(int slot)
 {
   return QDir::cleanPath(PrimedGunCannonLibraryDir() +
                          QStringLiteral("/slot_%1").arg(slot));
-}
-
-QString PrimedGunCannonDefaultPreviewDir()
-{
-  return QDir::cleanPath(PrimedGunCannonLibraryDir() + QStringLiteral("/default"));
 }
 
 QString PrimedGunCannonCustomDir()
@@ -214,23 +231,20 @@ QString PrimedGunCannonCustomDir()
   return QDir::cleanPath(PrimedGunCannonLibraryDir() + QStringLiteral("/custom"));
 }
 
-QString PrimedGunCannonPresetDir()
-{
-  return QDir::cleanPath(PrimedGunCannonLibraryDir() + QStringLiteral("/presets"));
-}
-
 QString PrimedGunCannonRemoveShinePresetPath()
 {
-  return PrimedGunCannonPresetDir() + QStringLiteral("/remove_shine/") +
-         QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX]) +
-         QStringLiteral(".dds");
+  return PrimedGunCannonLibraryFilePath(
+      QStringLiteral("presets/remove_shine/") +
+      QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX]) +
+      QStringLiteral(".dds"));
 }
 
 QString PrimedGunCannonRestoreShinePresetPath(int slot)
 {
-  return PrimedGunCannonPresetDir() + QStringLiteral("/restore_shine/slot_%1/").arg(slot) +
-         QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX]) +
-         QStringLiteral(".dds");
+  return PrimedGunCannonLibraryFilePath(
+      QStringLiteral("presets/restore_shine/slot_%1/").arg(slot) +
+      QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[PRIMEGUN_CANNON_SHEEN_TEXTURE_INDEX]) +
+      QStringLiteral(".dds"));
 }
 
 QString PrimedGunCannonUserTexturePackSourcePath()
@@ -249,15 +263,22 @@ QString PrimedGunCannonSourcePath(int slot, int texture_index, const QString& ex
          QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[texture_index]) + extension;
 }
 
+QString PrimedGunCannonExistingSourcePath(int slot, int texture_index, const QString& extension)
+{
+  return PrimedGunCannonLibraryFilePath(
+      QStringLiteral("slot_%1/").arg(slot) +
+      QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[texture_index]) + extension);
+}
+
 QString PrimedGunCannonDefaultPreviewPath(int texture_index)
 {
-  const QString base = PrimedGunCannonDefaultPreviewDir() + QLatin1Char('/') +
-                       QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[texture_index]);
-  const QString dds_path = base + QStringLiteral(".dds");
+  const QString relative_base = QStringLiteral("default/") +
+                               QString::fromLatin1(PRIMEGUN_CANNON_TEXTURE_NAMES[texture_index]);
+  const QString dds_path = PrimedGunCannonLibraryFilePath(relative_base + QStringLiteral(".dds"));
   if (QFileInfo(dds_path).isFile())
     return dds_path;
 
-  const QString png_path = base + QStringLiteral(".png");
+  const QString png_path = PrimedGunCannonLibraryFilePath(relative_base + QStringLiteral(".png"));
   if (QFileInfo(png_path).isFile())
     return png_path;
 
@@ -298,12 +319,12 @@ QString PrimedGunResolveCannonTextureSource(int slot, int texture_index, const Q
     return stored_source;
 
   const QString dds_source =
-      PrimedGunCannonSourcePath(slot, texture_index, QStringLiteral(".dds"));
+      PrimedGunCannonExistingSourcePath(slot, texture_index, QStringLiteral(".dds"));
   if (QFileInfo(dds_source).isFile())
     return dds_source;
 
   const QString png_source =
-      PrimedGunCannonSourcePath(slot, texture_index, QStringLiteral(".png"));
+      PrimedGunCannonExistingSourcePath(slot, texture_index, QStringLiteral(".png"));
   if (QFileInfo(png_source).isFile())
     return png_source;
 
@@ -2745,17 +2766,6 @@ void MainWindow::Play(const std::optional<std::string>& savestate_path)
     }
     else
     {
-      const QString selected_metroid_path =
-          Settings::GetQSettings()
-              .value(QString::fromLatin1(SELECTED_METROID_GAME_SETTING))
-              .toString();
-      if (!selected_metroid_path.isEmpty() && QFile::exists(selected_metroid_path))
-      {
-        StartGame(selected_metroid_path, ScanForSecondDisc::Yes,
-                  std::make_unique<BootSessionData>(savestate_path, DeleteSavestateAfterBoot::No));
-        return;
-      }
-
       const QString default_path = QString::fromStdString(Config::Get(Config::MAIN_DEFAULT_ISO));
       if (!default_path.isEmpty() && QFile::exists(default_path))
       {

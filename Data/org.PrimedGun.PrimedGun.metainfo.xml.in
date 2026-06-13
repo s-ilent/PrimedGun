@@ -16,7 +16,6 @@
   <launchable type="desktop-id">org.PrimedGun.PrimedGun.desktop</launchable>
   <provides>
     <binary>PrimedGun</binary>
-    <binary>primedgun-wrapper</binary>
     <id>org.PrimedGun.PrimedGun.desktop</id>
   </provides>
   <releases>

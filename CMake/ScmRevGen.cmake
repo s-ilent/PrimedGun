@@ -69,5 +69,5 @@ if(APPLE)
 endif()
 
 if(LINUX)
-  configure_source_file("Flatpak/org.PrimedGun.PrimedGun.metainfo.xml")
+  configure_source_file("Data/org.PrimedGun.PrimedGun.metainfo.xml")
 endif()

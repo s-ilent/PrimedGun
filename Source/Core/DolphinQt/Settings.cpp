@@ -335,8 +335,8 @@ void Settings::ApplyStyle()
   }
   // We manually load a dark palette for our included "(Dark)" style.
   // On Windows this also gives Dolphin a dark theme when the system is in dark mode.
-  // On Linux/Flatpak, the PrimedGun launcher should look consistent even when the
-  // host Qt/KDE theme is light.
+  // On Linux, the PrimedGun launcher should look consistent even when the host
+  // Qt/KDE theme is light.
   // Unfortunately it doesn't seem trivial to load a palette based on the stylesheet itself.
   else if (use_builtin_dark_style)
   {

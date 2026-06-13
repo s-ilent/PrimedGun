@@ -2213,6 +2213,15 @@ std::string PrimedGunCannonLibraryFolderForSlot(u32 slot)
          std::to_string(slot) + DIR_SEP;
 }
 
+std::string PrimedGunCannonAppLibraryFolderForSlot(u32 slot)
+{
+  return (std::filesystem::path(File::GetSysDirectory()) / ".." / "User" / LOAD_DIR /
+          PRIMEGUN_CANNON_LIBRARY_FOLDER / ("slot_" + std::to_string(slot)))
+             .lexically_normal()
+             .string() +
+         DIR_SEP;
+}
+
 std::string PrimedGunCannonActivePath(std::string_view texture_name, std::string_view extension)
 {
   return PrimedGunCannonActiveFolder() + std::string(texture_name) + std::string(extension);
@@ -2220,13 +2229,19 @@ std::string PrimedGunCannonActivePath(std::string_view texture_name, std::string
 
 std::string PrimedGunCannonSourcePath(u32 slot, std::string_view texture_name)
 {
-  const std::string slot_folder = PrimedGunCannonLibraryFolderForSlot(slot);
-  const std::string dds_path = slot_folder + std::string(texture_name) + ".dds";
-  if (File::Exists(dds_path))
-    return dds_path;
+  for (const std::string& slot_folder :
+       {PrimedGunCannonLibraryFolderForSlot(slot), PrimedGunCannonAppLibraryFolderForSlot(slot)})
+  {
+    const std::string dds_path = slot_folder + std::string(texture_name) + ".dds";
+    if (File::Exists(dds_path))
+      return dds_path;
 
-  const std::string png_path = slot_folder + std::string(texture_name) + ".png";
-  return File::Exists(png_path) ? png_path : std::string();
+    const std::string png_path = slot_folder + std::string(texture_name) + ".png";
+    if (File::Exists(png_path))
+      return png_path;
+  }
+
+  return {};
 }
 
 void PrimedGunCannonRegisterPack()

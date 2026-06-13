@@ -106,7 +106,7 @@ static bool InhibitFDO()
   return true;
 }
 
-// Inhibits screensaver when sandboxed through Flatpak
+// Inhibits screensaver through the desktop portal when available.
 // Does not work on KDE Plasma versions before 6.1.5
 static bool InhibitPortal()
 {
