@@ -3,6 +3,9 @@
 
 #include "DolphinQt/MainWindow.h"
 
+#include "Common/CommonPaths.h"
+#include "Common/Version.h"
+
 #include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
@@ -201,7 +204,8 @@ QString PrimedGunCannonLibraryDir()
 QString PrimedGunCannonAppLibraryDir()
 {
   return QDir::cleanPath(QString::fromStdString(File::GetSysDirectory()) +
-                         QStringLiteral("../User/Load/") +
+                         QStringLiteral("../") + QString::fromLatin1(PORTABLE_USER_DIR) +
+                         QStringLiteral("/Load/") +
                          QString::fromLatin1(PRIMEGUN_CANNON_LIBRARY_FOLDER));
 }
 
@@ -1622,7 +1626,9 @@ void MainWindow::ConnectStack()
   header_layout->setContentsMargins(14, 12, 14, 12);
   auto* brand = new QLabel(tr("PrimedGun"), header);
   brand->setObjectName(QStringLiteral("PrimedGunTitle"));
-  auto* version = new QLabel(tr("v0.9.9e"), header);
+  const QString primedgun_version =
+      QStringLiteral("v%1").arg(QString::fromStdString(Common::GetScmDescStr()));
+  auto* version = new QLabel(primedgun_version, header);
   version->setObjectName(QStringLiteral("PrimedGunMuted"));
   auto* status_tracking = new QLabel(tr("Waiting for DolphinXR OpenXR"), header);
   status_tracking->setObjectName(QStringLiteral("PrimedGunBad"));
@@ -2341,7 +2347,7 @@ void MainWindow::ConnectStack()
   auto* footer = new QHBoxLayout;
   auto* reset_all = new QPushButton(tr("Reset All"), game_tab);
   auto* save_settings_button = new QPushButton(tr("Save Settings"), game_tab);
-  auto* credit = new QLabel(tr("By Nobbie   v0.9.9e"), game_tab);
+  auto* credit = new QLabel(tr("By Nobbie   %1").arg(primedgun_version), game_tab);
   credit->setObjectName(QStringLiteral("PrimedGunMuted"));
   footer->addWidget(reset_all);
   footer->addWidget(save_settings_button);

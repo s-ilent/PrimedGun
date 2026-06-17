@@ -2215,7 +2215,7 @@ std::string PrimedGunCannonLibraryFolderForSlot(u32 slot)
 
 std::string PrimedGunCannonAppLibraryFolderForSlot(u32 slot)
 {
-  return (std::filesystem::path(File::GetSysDirectory()) / ".." / "User" / LOAD_DIR /
+  return (std::filesystem::path(File::GetSysDirectory()) / ".." / PORTABLE_USER_DIR / LOAD_DIR /
           PRIMEGUN_CANNON_LIBRARY_FOLDER / ("slot_" + std::to_string(slot)))
              .lexically_normal()
              .string() +

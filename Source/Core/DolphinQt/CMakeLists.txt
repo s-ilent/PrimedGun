@@ -607,19 +607,34 @@ file(GLOB_RECURSE primegun_user_asset_files CONFIGURE_DEPENDS
   "${CMAKE_SOURCE_DIR}/Data/User/Load/PrimedGun/*"
   "${CMAKE_SOURCE_DIR}/Data/User/Load/Textures/000_PrimedGunCannon/*"
 )
+if(WIN32 OR APPLE)
+  set(PRIMEGUN_RUNTIME_USER_DIR "User")
+else()
+  set(PRIMEGUN_RUNTIME_USER_DIR "user")
+endif()
 add_custom_target(primegun-user-assets-copy
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:dolphin-emu>/User/Load"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:dolphin-emu>/${PRIMEGUN_RUNTIME_USER_DIR}/Load"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_SOURCE_DIR}/Data/User/Load/PrimedGun"
-          "$<TARGET_FILE_DIR:dolphin-emu>/User/Load/PrimedGun"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:dolphin-emu>/User/Load/Textures"
+          "$<TARGET_FILE_DIR:dolphin-emu>/${PRIMEGUN_RUNTIME_USER_DIR}/Load/PrimedGun"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:dolphin-emu>/${PRIMEGUN_RUNTIME_USER_DIR}/Load/Textures"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_SOURCE_DIR}/Data/User/Load/Textures/000_PrimedGunCannon"
-          "$<TARGET_FILE_DIR:dolphin-emu>/User/Load/Textures/000_PrimedGunCannon"
+          "$<TARGET_FILE_DIR:dolphin-emu>/${PRIMEGUN_RUNTIME_USER_DIR}/Load/Textures/000_PrimedGunCannon"
   DEPENDS ${primegun_user_asset_files}
   COMMENT "Copying PrimedGun runtime texture assets"
 )
 add_dependencies(dolphin-emu primegun-user-assets-copy)
+
+if(UNIX AND NOT APPLE AND LINUX_LOCAL_DEV)
+  add_custom_target(primegun-sys-link
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:dolphin-emu>/Sys"
+    COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:dolphin-emu>/Sys"
+    COMMAND ${CMAKE_COMMAND} -E create_symlink "../../Data/Sys" "$<TARGET_FILE_DIR:dolphin-emu>/Sys"
+    COMMENT "Linking Data/Sys into the local runtime directory"
+  )
+  add_dependencies(dolphin-emu primegun-sys-link)
+endif()
 
 file(GLOB_RECURSE primegun_runtime_asset_files CONFIGURE_DEPENDS
   "${CMAKE_SOURCE_DIR}/assets/*"

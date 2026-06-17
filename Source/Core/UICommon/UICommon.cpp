@@ -312,6 +312,15 @@ void SetUserDirectory(std::string custom_path)
   }
 #endif
 
+#if defined(LINUX_LOCAL_DEV)
+  {
+    const std::string user_path = File::GetExeDirectory() + DIR_SEP PORTABLE_USER_DIR DIR_SEP;
+    File::CreateFullPath(user_path);
+    File::SetUserPath(D_USER_IDX, user_path);
+    return;
+  }
+#endif
+
   if (!custom_path.empty())
   {
     File::CreateFullPath(custom_path + DIR_SEP);
