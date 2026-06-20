@@ -249,6 +249,8 @@ bool s_have_mode_probe_words = false;
 u64 s_last_scan_reticle_trace_frame = 0;
 bool s_have_dumped_scan_indicator_code = false;
 u32 s_last_validated_gun = 0;
+u32 s_last_patch_player = 0;
+u64 s_patch_reapply_until_frame = 0;
 bool s_cannon_hand_pose_ready = false;
 bool s_smooth_matrix_valid = false;
 float s_smooth_matrix[12] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f,
@@ -3739,6 +3741,27 @@ void OnFrameEnd(Core::System& system, const Core::CPUThreadGuard& guard)
   const bool have_player =
       TryReadU32(guard, ADDRESS.state_manager + ADDRESS.player_offset, &player) &&
       player >= 0x80000000u;
+  if (!have_player)
+  {
+    if (s_last_patch_player != 0)
+      s_patch_reapply_until_frame = s_frame_counter + 180u;
+    s_last_patch_player = 0;
+  }
+  else if (player != s_last_patch_player)
+  {
+    s_last_patch_player = player;
+    s_patches_applied_this_boot = false;
+    s_patch_reapply_until_frame = s_frame_counter + 180u;
+  }
+
+  const bool patch_reapply_window = have_player && s_frame_counter < s_patch_reapply_until_frame;
+  if (settings.builtin_patches_enabled &&
+      (patch_reapply_window || !s_patches_applied_this_boot || (s_frame_counter % 60) == 0))
+  {
+    ApplyBuiltinPatches(system, guard);
+    s_patches_applied_this_boot = true;
+  }
+
   const bool gameplay_input_active = have_player && PlayerIsFirstPersonUnmorphed(guard, player);
   const bool orbit_lock_active = gameplay_input_active && OrbitLockButtonHeld(guard, ADDRESS.state_manager);
   s_gameplay_input_active.store(gameplay_input_active, std::memory_order_relaxed);
@@ -3829,6 +3852,8 @@ void ResetNativeRuntime()
   s_last_scan_reticle_trace_frame = 0;
   s_have_dumped_scan_indicator_code = false;
   s_last_validated_gun = 0;
+  s_last_patch_player = 0;
+  s_patch_reapply_until_frame = 0;
   s_cannon_hand_pose_ready = false;
   s_smooth_matrix_valid = false;
   s_controller_base_x = 0.0f;
