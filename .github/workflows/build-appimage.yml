@@ -3,6 +3,16 @@ name: Build VR AppImage
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - '**.cpp'
+      - '**.h'
+      - '**.c'
+      - '**.hpp'
+      - '**.cmake'
+      - '**/CMakeLists.txt'
+      - 'Externals/**'
+      - 'Data/**'
+      - '.github/workflows/build-appimage.yml'
   workflow_dispatch:
 
 jobs:

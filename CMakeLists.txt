@@ -684,7 +684,7 @@ if(ENABLE_VR)
   # GCC 16 rejects the Khronos loader exception wrapper generated in this SDK snapshot. Disable
   # the loader's C ABI exception catch layer for affected Linux toolchains until the external SDK
   # is updated.
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 16)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(BUILD_LOADER_WITH_EXCEPTION_HANDLING OFF CACHE BOOL "" FORCE)
   endif()
 
