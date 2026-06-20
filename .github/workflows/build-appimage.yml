@@ -1,0 +1,60 @@
+name: Build VR AppImage
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout Source Code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake git g++ ninja-build pkg-config \
+          libx11-dev libgl1-mesa-dev libxext-dev libxrandr-dev libxi-dev \
+          libudev-dev libevdev-dev libasound2-dev libpulse-dev libfmt-dev \
+          libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+          qt6-base-dev qt6-svg-dev libegl1-mesa-dev libwayland-dev \
+          libxkbcommon-dev libvulkan-dev
+
+    - name: Compile the Application
+      run: |
+        cmake -S . -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX=/usr
+        cmake --build build --parallel
+
+    - name: Install to AppDir
+      run: |
+        DESTDIR=AppDir cmake --install build
+        
+        # Ensure the desktop file and icon are in the AppDir root for linuxdeploy
+        cp AppDir/usr/share/applications/org.PrimedGun.PrimedGun.desktop AppDir/
+        cp AppDir/usr/share/icons/hicolor/256x256/apps/org.PrimedGun.PrimedGun.png AppDir/
+
+    - name: Build AppImage with linuxdeploy
+      env:
+        ARCH: x86_64
+        QMAKE: /usr/bin/qmake6
+      run: |
+        wget -c -nv "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+        wget -c -nv "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
+        chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+        
+        # linuxdeploy uses AppRun and bundles dependencies
+        ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
+
+    - name: Upload Finished AppImage
+      uses: actions/upload-artifact@v4
+      with:
+        name: primedgun-vr-appimage
+        path: "*.AppImage"
