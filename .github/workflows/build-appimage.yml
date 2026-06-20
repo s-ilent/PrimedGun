@@ -19,7 +19,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          cmake git g++ ninja-build pkg-config \
+          cmake git gcc-12 g++-12 ninja-build pkg-config \
           libx11-dev libgl1-mesa-dev libxext-dev libxrandr-dev libxi-dev \
           libudev-dev libevdev-dev libasound2-dev libpulse-dev libfmt-dev \
           libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
@@ -30,7 +30,9 @@ jobs:
       run: |
         cmake -S . -B build -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_INSTALL_PREFIX=/usr
+          -DCMAKE_INSTALL_PREFIX=/usr \
+          -DCMAKE_C_COMPILER=gcc-12 \
+          -DCMAKE_CXX_COMPILER=g++-12
         cmake --build build --parallel
 
     - name: Install to AppDir
