@@ -23,7 +23,7 @@ jobs:
           libx11-dev libgl1-mesa-dev libxext-dev libxrandr-dev libxi-dev \
           libudev-dev libevdev-dev libasound2-dev libpulse-dev libfmt-dev \
           libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-          qt6-base-dev qt6-svg-dev libegl1-mesa-dev libwayland-dev \
+          qt6-base-dev libqt6svg6-dev libegl1-mesa-dev libwayland-dev \
           libxkbcommon-dev libvulkan-dev
 
     - name: Compile the Application
