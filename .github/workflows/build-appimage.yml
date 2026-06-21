@@ -2,17 +2,17 @@ name: Build VR AppImage
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
-      - '**.cpp'
-      - '**.h'
-      - '**.c'
-      - '**.hpp'
-      - '**.cmake'
-      - '**/CMakeLists.txt'
-      - 'Externals/**'
-      - 'Data/**'
-      - '.github/workflows/build-appimage.yml'
+      - "**.cpp"
+      - "**.h"
+      - "**.c"
+      - "**.hpp"
+      - "**.cmake"
+      - "**/CMakeLists.txt"
+      - "Externals/**"
+      - "Data/**"
+      - ".github/workflows/build-appimage.yml"
   workflow_dispatch:
 
 jobs:
@@ -20,53 +20,54 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout Source Code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-    - name: Install System Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          cmake git gcc-12 g++-12 ninja-build pkg-config \
-          libx11-dev libgl1-mesa-dev libxext-dev libxrandr-dev libxi-dev \
-          libudev-dev libevdev-dev libasound2-dev libpulse-dev libfmt-dev \
-          libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-          qt6-base-dev qt6-base-private-dev libqt6svg6-dev libegl1-mesa-dev libwayland-dev \
-          libxkbcommon-dev libvulkan-dev
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake git gcc-12 g++-12 ninja-build pkg-config \
+            libx11-dev libgl1-mesa-dev libxext-dev libxrandr-dev libxi-dev \
+            libudev-dev libevdev-dev libasound2-dev libpulse-dev libfmt-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            qt6-base-dev qt6-base-private-dev libqt6svg6-dev libegl1-mesa-dev libwayland-dev \
+            libxkbcommon-dev libvulkan-dev
 
-    - name: Compile the Application
-      run: |
-        cmake -S . -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_INSTALL_PREFIX=/usr \
-          -DCMAKE_C_COMPILER=gcc-12 \
-          -DCMAKE_CXX_COMPILER=g++-12
-        cmake --build build --parallel
+      - name: Compile the Application
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_C_COMPILER=gcc-12 \
+            -DCMAKE_CXX_COMPILER=g++-12
+          cmake --build build --parallel
 
-    - name: Install to AppDir
-      run: |
-        DESTDIR=AppDir cmake --install build
-        
-        # Ensure the desktop file and icon are in the AppDir root for linuxdeploy
-        cp AppDir/usr/share/applications/org.PrimedGun.PrimedGun.desktop AppDir/
-        cp AppDir/usr/share/icons/hicolor/256x256/apps/org.PrimedGun.PrimedGun.png AppDir/
+      - name: Install to AppDir
+        run: |
+          DESTDIR=AppDir cmake --install build
 
-    - name: Build AppImage with linuxdeploy
-      env:
-        ARCH: x86_64
-        QMAKE: /usr/bin/qmake6
-      run: |
-        wget -c -nv "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
-        wget -c -nv "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
-        chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
-        
-        # linuxdeploy uses AppRun and bundles dependencies
-        ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
+          # Ensure the desktop file and icon are in the AppDir root for linuxdeploy
+          cp AppDir/usr/share/applications/org.PrimedGun.PrimedGun.desktop AppDir/
+          cp AppDir/usr/share/icons/hicolor/256x256/apps/org.PrimedGun.PrimedGun.png AppDir/
 
-    - name: Upload Finished AppImage
-      uses: actions/upload-artifact@v4
-      with:
-        name: primedgun-vr-appimage
-        path: "*.AppImage"
+      - name: Build AppImage with linuxdeploy
+        env:
+          ARCH: x86_64
+          QMAKE: /usr/bin/qmake6
+          EXTRA_QT_PLUGINS: iconengines,wayland
+        run: |
+          wget -c -nv "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+          wget -c -nv "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
+
+          # linuxdeploy uses AppRun and bundles dependencies
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
+
+      - name: Upload Finished AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: primedgun-vr-appimage
+          path: "*.AppImage"
